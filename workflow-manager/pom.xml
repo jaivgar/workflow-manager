@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>se.ltu.workflow</groupId>
+  <artifactId>workflow-manager</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  
+  <name>workflow-manager</name>
+  <description>Workflow Manager Arrowhead system</description>
+  <url>https://github.com/jaivgar/workflow-manager</url>
+  
+  <packaging>jar</packaging>
+  
+  <licenses>
+   	<license>
+   		<name>Eclipse Public License 2.0</name>
+      	<url>https://www.eclipse.org/legal/epl-2.0/</url>
+   	</license>
+  </licenses>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    
+    <maven.compiler.release>11</maven.compiler.release>
+    <maven.compiler.source>11</maven.compiler.source>
+    <maven.compiler.target>11</maven.compiler.target>
+    
+    <kalix.version>0.4.4</kalix.version>
+  </properties>
+
+  <dependencies>
+  		<!-- include Arrowhead Kalix -->
+  		<dependency>
+		    <groupId>se.arkalix</groupId>
+		    <artifactId>kalix-base</artifactId>
+		    <version>${kalix.version}</version>
+		</dependency>
+		<dependency>
+		    <groupId>se.arkalix</groupId>
+		    <artifactId>kalix-core-plugins</artifactId>
+		    <version>${kalix.version}</version>
+		</dependency>
+		<dependency>
+		    <groupId>se.arkalix</groupId>
+		    <artifactId>kalix-processors</artifactId>
+		    <version>${kalix.version}</version>
+		    <scope>provided</scope>
+		</dependency>
+		
+		<!-- SLF4J JUL Back-End -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-jdk14</artifactId>
+            <version>1.7.30</version>
+        </dependency>
+  
+		<!-- include junit 5 -->
+  		<dependency>
+        	<groupId>org.junit.jupiter</groupId>
+        	<artifactId>junit-jupiter-api</artifactId>
+        	<version>5.3.2</version>
+        	<scope>test</scope>
+    	</dependency>
+    	<dependency>
+        	<groupId>org.junit.jupiter</groupId>
+        	<artifactId>junit-jupiter-engine</artifactId>
+        	<version>5.3.2</version>
+        	<scope>test</scope>
+    	</dependency>
+		<dependency>
+	        <groupId>org.junit.vintage</groupId>
+	        <artifactId>junit-vintage-engine</artifactId>
+	        <version>5.3.2</version>
+	        <scope>test</scope>
+	    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
+      <plugins>
+        <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
+        <plugin>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>3.1.0</version>
+        </plugin>
+        <!-- default lifecycle, jar packaging: see https://maven.apache.org/ref/current/maven-core/default-bindings.html#Plugin_bindings_for_jar_packaging -->
+		
+		<plugin>
+ 			<artifactId>maven-resources-plugin</artifactId>
+ 			<version>3.0.2</version>
+	    	<executions>
+      			<execution>
+          			<id>copy-resources</id>
+          			<phase>validate</phase>
+           			<goals>
+              			<goal>copy-resources</goal>
+		    		</goals>
+           			<configuration>
+              			<outputDirectory>${basedir}/target</outputDirectory>
+              			<resources>
+              				<resource>
+                  				<directory>src/main/resources</directory>
+                  				<includes>
+            						<include>application.properties</include>
+            						<include>log4j2.xml</include>
+               	  				</includes>
+               				</resource>
+              			</resources>
+          			</configuration>
+          		</execution>
+      		</executions>
+      	</plugin>
+        <plugin>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.8.1</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-assembly-plugin</artifactId>
+          <version>3.2.0</version>
+          <configuration>
+            <descriptorRefs>
+               <descriptorRef>jar-with-dependencies</descriptorRef>
+            </descriptorRefs>
+          </configuration>
+          <executions>
+            <execution>
+               <id>make-assembly</id>
+               <phase>package</phase>
+               <goals>
+               	 <goal>single</goal>
+               </goals>
+           	</execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
