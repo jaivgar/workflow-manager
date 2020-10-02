@@ -2,7 +2,9 @@ package se.ltu.workflow.manager;
 
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +21,7 @@ import se.arkalix.security.access.AccessPolicy;
 import se.arkalix.security.identity.OwnedIdentity;
 import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
-import se.ltu.workflow.manager.dto.Echo;
+import se.arkalix.util.concurrent.Schedulers;
 import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
@@ -68,7 +70,9 @@ public class WManagerMain {
                     .localPort(systemPort)
                     .build();
             
-            // Create client to send HTTPRequest
+            /* Create client to send HTTPRequest, but only to non Arrowhead services! Is recommended to
+             * use HttpConsumer when dealing with Arrowhead services
+             */
             final var client = new HttpClient.Builder()
                     .identity(identity)
                     .trustStore(trustStore)
@@ -77,25 +81,8 @@ public class WManagerMain {
             /* Check that the core systems are available - We want this call synchronous, as 
              * initialization should not continue if they are not succesfull
              */
-            // Service Registry
-            final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
-            final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
-            final var serviceRegistrySocketAddress = new InetSocketAddress(serviceRegistryAddres, serviceRegistryPort);
-            // Send GET request to echo
-            // TODO: Error due to not using DTO class in bodyAsClassIfSuccess() method, 
-            client.send(serviceRegistrySocketAddress, new HttpClientRequest()
-                    .method(HttpMethod.GET)
-                    .uri("/echo"))
-            .flatMap(response -> response.bodyAsClassIfSuccess(DtoEncoding.JSON, EchoDto.class))
-            .ifSuccess(body -> {
-                logger.info("Service Registry core system is reachable.");
-            })
-            .onFailure(throwable -> {
-                logger.error("Service Registry mandatory core system is not reachable, Arrowhead local cloud incomplete!");
-                throwable.printStackTrace();
-            });
+            checkCoreSystems(client);
 
-            
             //TODO: Check that there are no more Workflow Managers in the workstation
             
             // Add HTTP Service to Arrowhead system
@@ -111,6 +98,8 @@ public class WManagerMain {
                     .get("", (request, response) -> {
                         
                         // Return the list of workflows available by looking at the Workflow Executors
+                        system.consume()
+                        .encodings(EncodingDescriptor.JSON);
                         
                         // Dummy response
                         response
@@ -144,8 +133,95 @@ public class WManagerMain {
                     .onFailure(Throwable::printStackTrace);
             
         } catch (Exception e) {
-            // TODO: handle exception
+            e.printStackTrace();
         }
         
+    }
+    
+    private static void checkCoreSystems(HttpClient  client) throws InterruptedException, TimeoutException {
+
+        // Service Registry
+        final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
+        final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
+        final var serviceRegistrySocketAddress = new InetSocketAddress(serviceRegistryAddres, serviceRegistryPort);
+        // Send GET request to echo service
+        try {
+            String result = client.send(serviceRegistrySocketAddress, new HttpClientRequest()
+                    .method(HttpMethod.GET)
+                    .uri("serviceregistry/echo"))
+                    .flatMap(response -> response.bodyAsString())
+                    .await(Duration.ofSeconds(5));
+            if (!result.isEmpty()) {
+                logger.info("Service Registry core system is reachable.");
+            }
+            else{
+                logger.warn("Service Registry core system was reached, but Echo message was empty!");
+            }
+        }
+        catch (InterruptedException e) {
+            logger.error("Workflow Manager interrupted when waiting for Service Regsitry echo message");
+            throw e;
+        }
+        catch (TimeoutException e) {
+            logger.error("Service Registry mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+            throw e;
+        }
+
+        // Orchestrator
+        final String OrchestratorAddres = props.getProperty("orch_address","127.0.0.1");
+        final int OrchestratorPort = props.getIntProperty("orch_port", 8441);
+        final var OrchestratorAddress = new InetSocketAddress(OrchestratorAddres, OrchestratorPort);
+        // Send GET request to echo service
+        try {
+            String result = client.send(OrchestratorAddress, new HttpClientRequest()
+                    .method(HttpMethod.GET)
+                    .uri("orchestrator/echo"))
+                    .flatMap(response -> response.bodyAsString())
+                    .await(Duration.ofSeconds(5));
+            if (!result.isEmpty()) {
+                logger.info("Orchestrator core system is reachable.");
+            }
+            else{
+                logger.warn("Orchestrator core system was reached, but Echo message was empty!");
+            }
+        }
+        catch (InterruptedException e) {
+            logger.error("Workflow Manager interrupted when waiting for Orchestrator echo message");
+            throw e;
+        }
+        catch (TimeoutException e) {
+            logger.error("Orchestrator mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+            throw e;
+        }
+        
+        if (props.getBooleanProperty("server.ssl.enabled", false)) {
+            // Authorization - In this case we could obtain the address and port from Orchestrator also
+            final String AuthorizationAddres = props.getProperty("auth_address","127.0.0.1");
+            final int AuthorizationPort = props.getIntProperty("auth_port", 8445);
+            final var AuthorizationSocketAddress = new InetSocketAddress(AuthorizationAddres, AuthorizationPort);
+            // Send GET request to echo service
+            try {
+                String result = client.send(AuthorizationSocketAddress, new HttpClientRequest()
+                        .method(HttpMethod.GET)
+                        .uri("authorization/echo"))
+                        .flatMap(response -> response.bodyAsString())
+                        .await(Duration.ofSeconds(5));
+                if (!result.isEmpty()) {
+                    logger.info("Authorization core system is reachable.");
+                }
+                else{
+                    logger.warn("Authorization core system was reached, but Echo message was empty!");
+                }
+            }
+            catch (InterruptedException e) {
+                logger.error("Workflow Manager interrupted when waiting for Authorization echo message");
+                throw e;
+            }
+            catch (TimeoutException e) {
+                logger.error("Authorization mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+                throw e;
+            }
+        }
+
     }
 }

@@ -105,24 +105,27 @@ public class TypeSafeProperties extends Properties {
         TypeSafeProperties prop = new TypeSafeProperties();
 
         try {
-            // Check for the usual name of properties file
+
+            // Check for a default properties file
+            if (Files.isReadable(Paths.get(DEFAULT_PROP))) {
+                prop.load(new FileInputStream(DEFAULT_PROP));
+            } else if (Files.isReadable(Paths.get(DEFAULT_PROP_DIR))) {
+                prop.load(new FileInputStream(DEFAULT_PROP_DIR));
+            }
+            
+            // Check for the usual name of properties file (Will override defaults!)
             if (Files.isReadable(Paths.get(APP_PROP))) {
                 prop.load(new FileInputStream(APP_PROP));
             } else if (Files.isReadable(Paths.get(APP_PROP_DIR))) {
                 prop.load(new FileInputStream(APP_PROP_DIR));
             }
             
-            // Check for a default properties file
-            if (Files.isReadable(Paths.get(DEFAULT_PROP))) {
-                prop.load(new FileInputStream(DEFAULT_PROP));
-            } else if (Files.isReadable(Paths.get(DEFAULT_PROP_DIR))) {
-                prop.load(new FileInputStream(DEFAULT_PROP_DIR));
-            } else {
-                throw new ServiceConfigurationError(
-                        "default.conf file not found in the working directory! (" + System.getProperty("user.dir") + ")");
-            }
         } catch (IOException e) {
             throw new AssertionError("File loading failed...", e);
+        }
+        
+        if (prop.isEmpty()) {
+            throw new RuntimeException("No properties file found in working directory (" + System.getProperty("user.dir") + ")");
         }
 
         //If MySQL based JDBC URLs are used, we append the system default time zone to the URL

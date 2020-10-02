@@ -25,11 +25,15 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     
-    <maven.compiler.release>11</maven.compiler.release>
     <maven.compiler.source>11</maven.compiler.source>
     <maven.compiler.target>11</maven.compiler.target>
+    <maven.compiler.version>3.8.1</maven.compiler.version>
     
-    <kalix.version>0.4.4</kalix.version>
+    <maven.dependency.version>3.1.2</maven.dependency.version>
+    
+    <maven.jar.version>3.1.0</maven.jar.version>
+    
+    <kalix.version>0.4.5</kalix.version>
   </properties>
 
   <dependencies>
@@ -80,62 +84,100 @@
   </dependencies>
 
   <build>
+  	<defaultGoal>clean verify</defaultGoal>
     <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
       <plugins>
+      
         <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
         <plugin>
           <artifactId>maven-clean-plugin</artifactId>
           <version>3.1.0</version>
         </plugin>
+        
         <!-- default lifecycle, jar packaging: see https://maven.apache.org/ref/current/maven-core/default-bindings.html#Plugin_bindings_for_jar_packaging -->
-		
 		<plugin>
- 			<artifactId>maven-resources-plugin</artifactId>
- 			<version>3.0.2</version>
-	    	<executions>
-      			<execution>
-          			<id>copy-resources</id>
-          			<phase>validate</phase>
-           			<goals>
-              			<goal>copy-resources</goal>
-		    		</goals>
-           			<configuration>
-              			<outputDirectory>${basedir}/target</outputDirectory>
-              			<resources>
-              				<resource>
-                  				<directory>src/main/resources</directory>
-                  				<includes>
-            						<include>application.properties</include>
-            						<include>log4j2.xml</include>
-               	  				</includes>
-               				</resource>
-              			</resources>
-          			</configuration>
-          		</execution>
-      		</executions>
+		  <artifactId>maven-resources-plugin</artifactId>
+ 		  <version>3.0.2</version>
+ 		  <executions>
+ 		  	<execution>
+ 		  	  <id>copy-resources</id>
+ 		  	  <phase>validate</phase>
+ 		  	  <goals>
+ 		  	  	<goal>copy-resources</goal>
+		  	  </goals>
+		  	  <configuration>
+		  	  	<outputDirectory>${basedir}/target</outputDirectory>
+		  	  	<resources>
+		  	  	  <resource>
+                  	<directory>src/main/resources</directory>
+                  	<includes>
+                  	  <include>application.properties</include>
+                  	  <!-- <include>log4j2.xml</include> -->
+               	  	</includes>
+               	  </resource>
+               	</resources>
+              </configuration>
+          	</execution>
+          </executions>
       	</plugin>
+      	
         <plugin>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>3.8.1</version>
-        </plugin>
-        <plugin>
-          <artifactId>maven-assembly-plugin</artifactId>
-          <version>3.2.0</version>
-          <configuration>
-            <descriptorRefs>
-               <descriptorRef>jar-with-dependencies</descriptorRef>
-            </descriptorRefs>
-          </configuration>
+          <version>${maven.compiler.version}</version>
           <executions>
-            <execution>
-               <id>make-assembly</id>
-               <phase>package</phase>
-               <goals>
-               	 <goal>single</goal>
-               </goals>
-           	</execution>
+          	<execution>
+           	  <id>default-compile</id>
+           	  <configuration>
+           	  	<showDeprecation>true</showDeprecation>
+           	  	<showWarnings>true</showWarnings>
+           	  	<compilerArguments>
+           	  	  <source>${maven.compiler.target}</source>
+           	  	  <target>${maven.compiler.source}</target>
+              	</compilerArguments>
+              </configuration>
+            </execution>
           </executions>
-        </plugin>
+          <configuration>
+          	<source>${maven.compiler.source}</source>
+          	<target>${maven.compiler.target}</target>
+          </configuration>
+      	</plugin>
+        
+        <!-- Build an executable JAR -->
+        <plugin>
+	      <groupId>org.apache.maven.plugins</groupId>
+	      <artifactId>maven-jar-plugin</artifactId>
+	      <version>${maven.jar.version}</version>
+	      <configuration>
+	        <archive>
+	          <manifest>
+	            <addClasspath>true</addClasspath>
+	            <mainClass>se.ltu.workflow.manager.WManagerMain</mainClass>
+	            <classpathPrefix>lib/</classpathPrefix> <!-- Map with copied dependencies -->
+	          </manifest>
+	        </archive>
+	      </configuration>
+	    </plugin>
+	    
+	    <!-- Copy project dependency --> <!-- My problem is with dependencies not copied at runtime!!!! -->
+	    <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>${maven.dependency.version}</version>
+        <executions>
+          <execution>
+            <id>copy-dependencies</id>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <!-- exclude junit, we need runtime dependency only -->
+              <outputDirectory>${basedir}/target/lib/</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       </plugins>
     </pluginManagement>
   </build>
