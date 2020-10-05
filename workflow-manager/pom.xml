@@ -31,6 +31,8 @@
     
     <maven.dependency.version>3.1.2</maven.dependency.version>
     
+    <maven.assembly.version>3.3.0</maven.assembly.version>
+    
     <maven.jar.version>3.1.0</maven.jar.version>
     
     <kalix.version>0.4.5</kalix.version>
@@ -85,7 +87,8 @@
 
   <build>
   	<defaultGoal>clean verify</defaultGoal>
-    <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
+  	<!-- Configure plugins to avoid using Maven defaults (should be in parent pom) but need to declare them explicitly outside to use them!-->
+    <pluginManagement> 
       <plugins>
       
         <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
@@ -100,7 +103,7 @@
  		  <version>3.0.2</version>
  		  <executions>
  		  	<execution>
- 		  	  <id>copy-resources</id>
+ 		  	  <id>copy-resources-custom</id>
  		  	  <phase>validate</phase>
  		  	  <goals>
  		  	  	<goal>copy-resources</goal>
@@ -124,26 +127,16 @@
         <plugin>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>${maven.compiler.version}</version>
-          <executions>
-          	<execution>
-           	  <id>default-compile</id>
-           	  <configuration>
-           	  	<showDeprecation>true</showDeprecation>
-           	  	<showWarnings>true</showWarnings>
-           	  	<compilerArguments>
-           	  	  <source>${maven.compiler.target}</source>
-           	  	  <target>${maven.compiler.source}</target>
-              	</compilerArguments>
-              </configuration>
-            </execution>
-          </executions>
+          <!-- Compiler Plugin executes automatically during their phases, you don't have to put executions unlike many other plugins -->
           <configuration>
           	<source>${maven.compiler.source}</source>
           	<target>${maven.compiler.target}</target>
+          	<showDeprecation>true</showDeprecation>
+          	<showWarnings>true</showWarnings>
           </configuration>
       	</plugin>
         
-        <!-- Build an executable JAR -->
+        <!-- Build an executable JAR and then copy project dependencies-->
         <plugin>
 	      <groupId>org.apache.maven.plugins</groupId>
 	      <artifactId>maven-jar-plugin</artifactId>
@@ -153,32 +146,83 @@
 	          <manifest>
 	            <addClasspath>true</addClasspath>
 	            <mainClass>se.ltu.workflow.manager.WManagerMain</mainClass>
-	            <classpathPrefix>lib/</classpathPrefix> <!-- Map with copied dependencies -->
+	            <!-- Map with copied dependencies, comment otherwise -->
+	            <classpathPrefix>lib/</classpathPrefix> 
 	          </manifest>
 	        </archive>
 	      </configuration>
 	    </plugin>
 	    
-	    <!-- Copy project dependency --> <!-- My problem is with dependencies not copied at runtime!!!! -->
+	    <!-- Copy project dependencies XOR assembly jar with dependencies included-->
 	    <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-dependency-plugin</artifactId>
-        <version>${maven.dependency.version}</version>
-        <executions>
-          <execution>
-            <id>copy-dependencies</id>
-            <phase>package</phase>
-            <goals>
-              <goal>copy-dependencies</goal>
-            </goals>
-            <configuration>
-              <!-- exclude junit, we need runtime dependency only -->
-              <outputDirectory>${basedir}/target/lib/</outputDirectory>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
+       	  <groupId>org.apache.maven.plugins</groupId>
+       	  <artifactId>maven-dependency-plugin</artifactId>
+       	  <version>${maven.dependency.version}</version>
+       	  <executions>
+          	<execution>
+          	  <id>copy-dependencies-custom</id> <!-- Needed see 2 below -->
+          	  <phase>package</phase> 
+          	  <!-- There are not default goals for Maven plugins, but goals can have default phases (Optional)-->
+          	  <goals>
+          	  	<!-- Default phase for goal: process-sources (Not part of "jar" build lifecycle, only part of "default"-->
+              	<goal>copy-dependencies</goal>
+              </goals>
+              <configuration>
+              	<!-- exclude junit, we need runtime dependency only -->
+              	<includeScope>runtime</includeScope>
+              	<outputDirectory>${basedir}/target/lib/</outputDirectory>
+              </configuration>
+          	</execution>
+          </executions>
+      	</plugin>
+      	
+      	<!-- Assembly jar with dependencies included XOR copy project dependencies -->
+      	<plugin>
+      	  <groupId>org.apache.maven.plugins</groupId>
+      	  <artifactId>maven-assembly-plugin</artifactId>
+      	  <version>${maven.assembly.version}</version>
+      	  <configuration>
+      	  	<descriptorRefs>
+      	  	  <descriptorRef>jar-with-dependencies</descriptorRef>
+    	  	</descriptorRefs>
+          </configuration>
+          <executions>
+          	<execution>
+          	  <id>make-assembly-custom</id>
+          	  <phase>package</phase>
+          	  <goals>
+          	  	<goal>single</goal>
+        	  </goals>
+        	  <configuration>
+        	  	<archive>
+        	  	  <manifest>
+        	  	  	<addClasspath>true</addClasspath>
+        	  	    <mainClass>se.ltu.workflow.manager.WManagerMain</mainClass>
+        	  	  </manifest>
+        	  	</archive>
+        	  </configuration>
+            </execution>
+          </executions>
+        </plugin>
+        
       </plugins>
     </pluginManagement>
+    <plugins>
+      <plugin>
+      	<artifactId>maven-resources-plugin</artifactId>
+      </plugin>
+      <plugin>
+      	<artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+      	<artifactId>maven-jar-plugin</artifactId>
+      </plugin>
+      <plugin>
+      	<artifactId>maven-dependency-plugin</artifactId>
+      </plugin>
+      <plugin>
+      	<artifactId>maven-assembly-plugin</artifactId>
+      </plugin>
+    </plugins>
   </build>
 </project>
