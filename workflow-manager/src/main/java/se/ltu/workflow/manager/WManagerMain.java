@@ -1,16 +1,16 @@
 package se.ltu.workflow.manager;
 
 import java.net.InetSocketAddress;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import se.arkalix.ArSystem;
+import se.arkalix.core.plugin.HttpJsonCloudPlugin;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.dto.DtoEncoding;
 import se.arkalix.net.http.HttpMethod;
@@ -23,36 +23,40 @@ import se.arkalix.security.identity.OwnedIdentity;
 import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
+
 import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
     
     private static final Logger logger = LoggerFactory.getLogger(WManagerMain.class);
     
-    private static TypeSafeProperties props = TypeSafeProperties.getProp();
+    private static final TypeSafeProperties props = TypeSafeProperties.getProp();
+    
+    static {
+        final var logLevel = Level.INFO;
+        //System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tF %1$tT %4$s %5$s%6$s%n");
+        final var root = java.util.logging.Logger.getLogger("");
+        root.setLevel(logLevel);
+        for (final var handler : root.getHandlers()) {
+            handler.setLevel(logLevel);
+        }
+    }
 
     public static void main( String[] args )
     {
         logger.info("Productive 4.0 Workflow Manager Demonstrator - Workflow Manager System");
         
-        // Working directory should always contain a properties file!
+        // Working directory should always contain a properties file and certificates!
         System.out.println("Working directory: " + System.getProperty("user.dir"));
 
         try {
-            
             // Retrieve properties to set up keystore and truststore
+            // The paths must start at the working directory
             final char[] pKeyPassword = props.getProperty("server.ssl.key-password", "123456").toCharArray();
             final char[] kStorePassword = props.getProperty("server.ssl.key-store-password", "123456").toCharArray();
             final String kStorePath = props.getProperty("server.ssl.key-store", "certificates/workflow_manager.p12");
             final char[] tStorePassword = props.getProperty("server.ssl.trust-store-password", "123456").toCharArray();
             final String tStorePath = props.getProperty("server.ssl.trust-store", "certificates/truststore.p12");
-            
-            // Not working
-//            Path kPath = Path.of(kStorePath);
-//            System.out.println("Path: "+ kPath +" works? " + kPath.toFile().isFile());
-            
-//            Path kPath = Paths.get(WManagerMain.class.getResource(kStorePath).toURI());
-//            System.out.println("Path: "+ kPath +" works? " + kPath.toFile().isFile());
             
             // Load properties for system identity and truststore
             final var identity = new OwnedIdentity.Loader()
@@ -69,15 +73,6 @@ public class WManagerMain {
             Arrays.fill(kStorePassword, 'x');
             Arrays.fill(tStorePassword, 'x');
             
-            final int systemPort = props.getIntProperty("server.port", 8502);
-            
-            // Create Arrowhead system
-            final var system = new ArSystem.Builder()
-                    .identity(identity)
-                    .trustStore(trustStore)
-                    .localPort(systemPort)
-                    .build();
-            
             /* Create client to send HTTPRequest, but only to non Arrowhead services! Is recommended to
              * use HttpConsumer when dealing with Arrowhead services
              */
@@ -89,21 +84,35 @@ public class WManagerMain {
             /* Check that the core systems are available - We want this call synchronous, as 
              * initialization should not continue if they are not succesfull
              */
-            checkCoreSystems(client);
+            checkCoreSystems(client,2);
 
             //TODO: Check that there are no more Workflow Managers in the workstation
             
+            final int systemPort = props.getIntProperty("server.port", 8502);
+            final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
+            final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
+            // In demo we can use "service-registry.uni" as hostname of Service Registry?
+            final var srSocketAddress = new InetSocketAddress(serviceRegistryAddres, serviceRegistryPort);
+            
+            // Create Arrowhead system
+            final var system = new ArSystem.Builder()
+                    .identity(identity)
+                    .trustStore(trustStore)
+                    .localPort(systemPort)
+                    .plugins(HttpJsonCloudPlugin.joinViaServiceRegistryAt(srSocketAddress))
+                    .build();
+            
             // Add HTTP Service to Arrowhead system
             system.provide(new HttpService()
-
                     // Mandatory service configuration details.
                     .name("WManager-workflows")
                     .encodings(EncodingDescriptor.JSON)
+                    // Could I have another AccessPolicy for intercloud consumers?
                     .accessPolicy(AccessPolicy.cloud())
                     .basePath("/workflows")
                     
                     // HTTP GET endpoint that exposes the workflows available in this workstation
-                    .get("", (request, response) -> {
+                    .get("/", (request, response) -> {
                         
                         // Return the list of workflows available by looking at the Workflow Executors
                         system.consume()
@@ -118,7 +127,7 @@ public class WManagerMain {
                         return Future.done();
                     })
                     
-                    .post("", (request, response) -> {
+                    .post("/", (request, response) -> {
                         //TODO: Check that consumer is a Smart Product authorized in the Factory
                         request.consumer().identity().certificate();
                         
@@ -129,6 +138,9 @@ public class WManagerMain {
                     // HTTP DELETE endpoint that causes the application to exit.
                     .delete("/runtime", (request, response) -> {
                         response.status(HttpStatus.NO_CONTENT);
+                        
+                        //TODO: Call unregister service of ServiceRegistry?
+                        system.shutdown();
 
                         // Exit in 0.5 seconds.
                         Schedulers.fixed()
@@ -146,60 +158,82 @@ public class WManagerMain {
         
     }
     
-    private static void checkCoreSystems(HttpClient  client) throws InterruptedException, TimeoutException {
+    private static void checkCoreSystems(HttpClient  client, int minutes) throws InterruptedException, TimeoutException {
 
         // Service Registry
         final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
         final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
         final var serviceRegistrySocketAddress = new InetSocketAddress(serviceRegistryAddres, serviceRegistryPort);
-        // Send GET request to echo service
-        try {
-            String result = client.send(serviceRegistrySocketAddress, new HttpClientRequest()
-                    .method(HttpMethod.GET)
-                    .uri("serviceregistry/echo"))
-                    .flatMap(response -> response.bodyAsString())
-                    .await(Duration.ofSeconds(5));
-            if (!result.isEmpty()) {
-                logger.info("Service Registry core system is reachable.");
+        int nCalls = 0;
+        // 5 seconds * 12 = 1 minute
+        while(nCalls/12 < minutes) {
+            // Send GET request to echo service
+            try {
+                /* TODO: Throws Exception in spawn thread when request does not find target, exiting application (How can I catch it?)
+                 * io.netty.channel.AbstractChannel$AnnotatedConnectException: finishConnect(..) failed: Connection refused: /127.0.0.1:8443
+                 */
+                String result = client.send(serviceRegistrySocketAddress, new HttpClientRequest()
+                        .method(HttpMethod.GET)
+                        .uri("serviceregistry/echo"))
+                        .flatMap(response -> response.bodyAsString())
+                        .await(Duration.ofSeconds(5));
+                // If exception is not thrown, request was successful so end loop
+                nCalls = Integer.MAX_VALUE;
+                if (!result.isEmpty()) {
+                    logger.info("Service Registry core system is reachable.");
+                }
+                else{
+                    logger.warn("Service Registry core system was reached, but Echo message was empty!");
+                }
             }
-            else{
-                logger.warn("Service Registry core system was reached, but Echo message was empty!");
+            catch (InterruptedException e) {
+                logger.error("Workflow Manager interrupted when waiting for Service Regsitry echo message");
+                throw e;
             }
-        }
-        catch (InterruptedException e) {
-            logger.error("Workflow Manager interrupted when waiting for Service Regsitry echo message");
-            throw e;
-        }
-        catch (TimeoutException e) {
-            logger.error("Service Registry mandatory core system is not reachable, Arrowhead local cloud incomplete!");
-            throw e;
+            catch (TimeoutException e) {
+                nCalls ++;
+                if(nCalls/12 >= minutes) {
+                    logger.error("Service Registry mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+                    throw e;
+                }
+                logger.info("Waiting for ServiceRegistry to be available ...");
+            }
         }
 
         // Orchestrator
         final String OrchestratorAddres = props.getProperty("orch_address","127.0.0.1");
         final int OrchestratorPort = props.getIntProperty("orch_port", 8441);
         final var OrchestratorAddress = new InetSocketAddress(OrchestratorAddres, OrchestratorPort);
-        // Send GET request to echo service
-        try {
-            String result = client.send(OrchestratorAddress, new HttpClientRequest()
-                    .method(HttpMethod.GET)
-                    .uri("orchestrator/echo"))
-                    .flatMap(response -> response.bodyAsString())
-                    .await(Duration.ofSeconds(5));
-            if (!result.isEmpty()) {
-                logger.info("Orchestrator core system is reachable.");
+        nCalls = 0;
+        
+        while(nCalls/12 < minutes) {
+         // Send GET request to echo service
+            try {
+                String result = client.send(OrchestratorAddress, new HttpClientRequest()
+                        .method(HttpMethod.GET)
+                        .uri("orchestrator/echo"))
+                        .flatMap(response -> response.bodyAsString())
+                        .await(Duration.ofSeconds(5));
+                nCalls = Integer.MAX_VALUE;
+                if (!result.isEmpty()) {
+                    logger.info("Orchestrator core system is reachable.");
+                }
+                else{
+                    logger.warn("Orchestrator core system was reached, but Echo message was empty!");
+                }
             }
-            else{
-                logger.warn("Orchestrator core system was reached, but Echo message was empty!");
+            catch (InterruptedException e) {
+                logger.error("Workflow Manager interrupted when waiting for Orchestrator echo message");
+                throw e;
             }
-        }
-        catch (InterruptedException e) {
-            logger.error("Workflow Manager interrupted when waiting for Orchestrator echo message");
-            throw e;
-        }
-        catch (TimeoutException e) {
-            logger.error("Orchestrator mandatory core system is not reachable, Arrowhead local cloud incomplete!");
-            throw e;
+            catch (TimeoutException e) {
+                nCalls ++;
+                if(nCalls/12 >= minutes) {
+                    logger.error("Orchestrator mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+                    throw e;
+                }
+                logger.info("Waiting for Orchestrator to be available ...");
+            }
         }
         
         if (props.getBooleanProperty("server.ssl.enabled", false)) {
@@ -207,28 +241,40 @@ public class WManagerMain {
             final String AuthorizationAddres = props.getProperty("auth_address","127.0.0.1");
             final int AuthorizationPort = props.getIntProperty("auth_port", 8445);
             final var AuthorizationSocketAddress = new InetSocketAddress(AuthorizationAddres, AuthorizationPort);
-            // Send GET request to echo service
-            try {
-                String result = client.send(AuthorizationSocketAddress, new HttpClientRequest()
-                        .method(HttpMethod.GET)
-                        .uri("authorization/echo"))
-                        .flatMap(response -> response.bodyAsString())
-                        .await(Duration.ofSeconds(5));
-                if (!result.isEmpty()) {
-                    logger.info("Authorization core system is reachable.");
+            nCalls = 0;
+            
+            while(nCalls/12 < minutes) {
+             // Send GET request to echo service
+                try {
+                    String result = client.send(AuthorizationSocketAddress, new HttpClientRequest()
+                            .method(HttpMethod.GET)
+                            .uri("authorization/echo"))
+                            .flatMap(response -> response.bodyAsString())
+                            .await(Duration.ofSeconds(5));
+                    nCalls = Integer.MAX_VALUE;
+                    if (!result.isEmpty()) {
+                        logger.info("Authorization core system is reachable.");
+                    }
+                    else{
+                        logger.warn("Authorization core system was reached, but Echo message was empty!");
+                    }
                 }
-                else{
-                    logger.warn("Authorization core system was reached, but Echo message was empty!");
+                catch (InterruptedException e) {
+                    logger.error("Workflow Manager interrupted when waiting for Authorization echo message");
+                    throw e;
+                }
+                catch (TimeoutException e) {
+                    nCalls ++;
+                    if(nCalls/12 >= minutes) {
+                        logger.error("Authorization mandatory core system is not reachable, Arrowhead local cloud incomplete!");
+                        throw e;
+                    }
+                    logger.info("Waiting for Authorization to be available ...");
+                    
+                    throw e;
                 }
             }
-            catch (InterruptedException e) {
-                logger.error("Workflow Manager interrupted when waiting for Authorization echo message");
-                throw e;
-            }
-            catch (TimeoutException e) {
-                logger.error("Authorization mandatory core system is not reachable, Arrowhead local cloud incomplete!");
-                throw e;
-            }
+            
         }
 
     }
