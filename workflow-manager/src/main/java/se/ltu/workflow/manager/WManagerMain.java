@@ -2,28 +2,35 @@ package se.ltu.workflow.manager;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import se.arkalix.ArServiceCache;
 import se.arkalix.ArSystem;
 import se.arkalix.core.plugin.HttpJsonCloudPlugin;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.dto.DtoEncoding;
+import se.arkalix.dto.DtoWritable;
 import se.arkalix.net.http.HttpMethod;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.client.HttpClient;
 import se.arkalix.net.http.client.HttpClientRequest;
+import se.arkalix.net.http.consumer.HttpConsumer;
+import se.arkalix.net.http.consumer.HttpConsumerRequest;
 import se.arkalix.net.http.service.HttpService;
 import se.arkalix.security.access.AccessPolicy;
 import se.arkalix.security.identity.OwnedIdentity;
 import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
-
+import se.ltu.workflow.manager.dto.WorkflowDto;
 import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
@@ -87,8 +94,10 @@ public class WManagerMain {
             checkCoreSystems(client,2);
 
             //TODO: Check that there are no more Workflow Managers in the workstation
-            
+            final String systemAddress = props.getProperty("server.address", "127.0.0.1");
             final int systemPort = props.getIntProperty("server.port", 8502);
+            final var systemSocketAddress = new InetSocketAddress(systemAddress, systemPort);
+            
             final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
             final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
             // In demo we can use "service-registry.uni" as hostname of Service Registry?
@@ -98,59 +107,120 @@ public class WManagerMain {
             final var system = new ArSystem.Builder()
                     .identity(identity)
                     .trustStore(trustStore)
-                    .localPort(systemPort)
+                    .localSocketAddress(systemSocketAddress)
                     .plugins(HttpJsonCloudPlugin.joinViaServiceRegistryAt(srSocketAddress))
+                    .serviceCache(ArServiceCache.withEntryLifetimeLimit(Duration.ofHours(1)))
                     .build();
             
-            // Add HTTP Service to Arrowhead system
+            // Add Echo HTTP Service to Arrowhead system
             system.provide(new HttpService()
                     // Mandatory service configuration details.
-                    .name("WManager-workflows")
+                    .name(WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION)
+                    .encodings(EncodingDescriptor.JSON)
+                    // Could I have another AccessPolicy for any consumers?
+                    .accessPolicy(AccessPolicy.cloud())
+                    .basePath(WManagerConstants.WMANAGER_URI)
+                    
+                    // ECHO service
+                    .get(WManagerConstants.ECHO_URI,(request, response) -> {
+                        logger.info("Receiving echo request");
+                        response
+                            .status(HttpStatus.OK)
+                            .header("content-type", "text/plain;charset=UTF-8")
+                            .header("cache-control", "no-cache, no-store, max-age=0, must-revalidate")
+                            .body("Got it!");
+                        
+                        return Future.done();
+                    }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
+            
+                     // HTTP DELETE endpoint that causes the application to exit.
+                    .delete("/runtime", (request, response) -> {
+                        response.status(HttpStatus.NO_CONTENT);
+                        
+                        //Shutdown server and unregisters (dismiss) the services using the HttpJsonCloudPlugin
+                        system.shutdown();
+        
+                        // Exit in 0.5 seconds.
+                        Schedulers.fixed()
+                            .schedule(Duration.ofMillis(500), () -> System.exit(0))
+                            .onFailure(Throwable::printStackTrace);
+        
+                        return Future.done();
+                    }))
+            
+                    .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION 
+                            + " service is now being served"))
+                    .ifFailure(Throwable.class, Throwable::printStackTrace)
+                    // Without await service is not sucessfully registered
+                    .await();
+            
+            // Add Workflows HTTP Service to Workflow Manager system
+            system.provide(new HttpService()
+                    // Mandatory service configuration details.
+                    .name(WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION)
                     .encodings(EncodingDescriptor.JSON)
                     // Could I have another AccessPolicy for intercloud consumers?
                     .accessPolicy(AccessPolicy.cloud())
-                    .basePath("/workflows")
+                    .basePath(WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI)
                     
-                    // HTTP GET endpoint that exposes the workflows available in this workstation
+                    // HTTP GET endpoint that returns the workflows available in this workstation
                     .get("/", (request, response) -> {
                         
-                        // Return the list of workflows available by looking at the Workflow Executors
+                        logger.info("Receiving GET " + WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI 
+                                + " request");
+                        
+                        List<WorkflowDto> workflows = new ArrayList<>();
+                        
+                        // Retrieve the workflows from the Workflow Executors
+                        // How to find more than one Workflow Executor?
                         system.consume()
-                        .encodings(EncodingDescriptor.JSON);
-                        
-                        // Dummy response
-                        response
-                        .status(HttpStatus.OK)
-                        .header("content-type", "text/html")
-                        .header("cache-control", "no-store");
-                        
+                            .name(WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_SERVICE_DEFINITION)
+                            .encodings(EncodingDescriptor.JSON)
+                            .using(HttpConsumer.factory())
+                            .flatMap(consumer -> consumer.send(new HttpConsumerRequest()
+                                .method(HttpMethod.GET)
+                                .uri(WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI)))
+                            .flatMap(responseConsume -> responseConsume.bodyAsList(WorkflowDto.class))
+                            .ifSuccess(workflow -> {
+                                workflows.addAll(workflow);
+                            })
+                            .ifFailure(Throwable.class, throwable -> {
+                                // Exception as ServiceNotFound are handled here, giving the log errors and moving forward
+                                logger.error("GET to " 
+                                        + WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI
+                                        + " failed");
+                                throwable.printStackTrace();
+                            }).await(); 
+                            
+                        // Add all the workflows retrieved to the response
+                        if(!workflows.isEmpty()) {
+                            response
+                                .status(HttpStatus.OK)
+                                .body((DtoWritable) workflows);
+                        }
+                        else {
+                            response
+                                .status(HttpStatus.NO_CONTENT);
+                        }
+
                         return Future.done();
-                    })
+                    }).metadata(Map.ofEntries(Map.entry("http-method","GET-POST"),Map.entry("request-object-POST","workflow")))
                     
                     .post("/", (request, response) -> {
+                        
+                        logger.info("Receiving POST " + WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI 
+                                + " request");
+                        
                         //TODO: Check that consumer is a Smart Product authorized in the Factory
                         request.consumer().identity().certificate();
                         
                         // Dummy response
                         return Future.done();
-                    })
-                    
-                    // HTTP DELETE endpoint that causes the application to exit.
-                    .delete("/runtime", (request, response) -> {
-                        response.status(HttpStatus.NO_CONTENT);
-                        
-                        //TODO: Call unregister service of ServiceRegistry?
-                        system.shutdown();
-
-                        // Exit in 0.5 seconds.
-                        Schedulers.fixed()
-                            .schedule(Duration.ofMillis(500), () -> System.exit(0))
-                            .onFailure(Throwable::printStackTrace);
-
-                        return Future.done();
                     }))
-                    
-                    .onFailure(Throwable::printStackTrace);
+                    .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION 
+                            + " service is now being served"))
+                    .ifFailure(Throwable.class, Throwable::printStackTrace)
+                    .await();
             
         } catch (Exception e) {
             e.printStackTrace();
