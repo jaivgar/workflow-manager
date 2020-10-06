@@ -20,10 +20,10 @@ public interface QueuedWorkflow {
     WStatus workflowStatus();
     
     // Wait till Kalix library update
-//    ZonedDateTime queueTime();
-//    
-//    ZonedDateTime startTime();
-//    
-//    ZonedDateTime endTime();
+    ZonedDateTime queueTime();
+    
+    ZonedDateTime startTime();
+    
+    ZonedDateTime endTime();
 
 }
