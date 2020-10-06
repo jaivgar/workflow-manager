@@ -2,6 +2,7 @@ package se.ltu.workflow.manager;
 
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.TimeoutException;
@@ -42,17 +43,24 @@ public class WManagerMain {
             // Retrieve properties to set up keystore and truststore
             final char[] pKeyPassword = props.getProperty("server.ssl.key-password", "123456").toCharArray();
             final char[] kStorePassword = props.getProperty("server.ssl.key-store-password", "123456").toCharArray();
-            final String kStorePath = props.getProperty("server.ssl.key-store", "keystore.p12");
+            final String kStorePath = props.getProperty("server.ssl.key-store", "certificates/workflow_manager.p12");
             final char[] tStorePassword = props.getProperty("server.ssl.trust-store-password", "123456").toCharArray();
-            final String tStorePath = props.getProperty("server.ssl.trust-store", "truststore.p12");
+            final String tStorePath = props.getProperty("server.ssl.trust-store", "certificates/truststore.p12");
+            
+            // Not working
+//            Path kPath = Path.of(kStorePath);
+//            System.out.println("Path: "+ kPath +" works? " + kPath.toFile().isFile());
+            
+//            Path kPath = Paths.get(WManagerMain.class.getResource(kStorePath).toURI());
+//            System.out.println("Path: "+ kPath +" works? " + kPath.toFile().isFile());
             
             // Load properties for system identity and truststore
             final var identity = new OwnedIdentity.Loader()
-                    .keyPassword(pKeyPassword)
-                    .keyStorePath(Path.of(kStorePath))
+                    .keyStorePath(kStorePath)
                     .keyStorePassword(kStorePassword)
+                    .keyPassword(pKeyPassword)
                     .load();
-            final var trustStore = TrustStore.read(Path.of(tStorePath), tStorePassword);
+            final var trustStore = TrustStore.read(tStorePath, tStorePassword);
             
             /* Remove variables storing passwords, as they are final they can not be unreferenced and 
              * will not be garbage collected

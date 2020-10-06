@@ -29,6 +29,8 @@
     <maven.compiler.target>11</maven.compiler.target>
     <maven.compiler.version>3.8.1</maven.compiler.version>
     
+    <maven.resources.version>3.0.2</maven.resources.version>
+    
     <maven.dependency.version>3.1.2</maven.dependency.version>
     
     <maven.assembly.version>3.3.0</maven.assembly.version>
@@ -98,10 +100,34 @@
         </plugin>
         
         <!-- default lifecycle, jar packaging: see https://maven.apache.org/ref/current/maven-core/default-bindings.html#Plugin_bindings_for_jar_packaging -->
+		
 		<plugin>
 		  <artifactId>maven-resources-plugin</artifactId>
- 		  <version>3.0.2</version>
+ 		  <version>${maven.resources.version}</version>
  		  <executions>
+ 		  	<!-- Change default behavior of resource plugin to not copy all resources inside jar -->
+ 		  	<execution>
+ 		  	  <!-- Take the default id to overwrite default plugin execution -->
+ 		  	  <id>default-resources</id>
+ 		  	  <phase>process-resources</phase>
+ 		  	  <goals>
+ 		  	  	<goal>resources</goal>
+		  	  </goals>
+		  	  <configuration>
+		  	  <!-- Keep output dir as the default (inside the jar) -->
+<!-- 		  	  	<outputDirectory>${project.build.directory}</outputDirectory> -->
+		  	  	<resources>
+		  	  	  <resource>
+		  	  	  	<!-- Resource dir is the default (src/main/resources) -->
+                  	<directory>src/main/resources</directory>
+					<excludes>
+					  <exclude>certificates/**</exclude>
+					</excludes>
+               	  </resource>
+               	</resources>
+              </configuration>
+          	</execution>
+          	<!-- Copy some resources to target directory -->
  		  	<execution>
  		  	  <id>copy-resources-custom</id>
  		  	  <phase>validate</phase>
@@ -115,6 +141,7 @@
                   	<directory>src/main/resources</directory>
                   	<includes>
                   	  <include>application.properties</include>
+                  	  <include>certificates/**</include>
                   	  <!-- <include>log4j2.xml</include> -->
                	  	</includes>
                	  </resource>
@@ -210,6 +237,14 @@
     <plugins>
       <plugin>
       	<artifactId>maven-resources-plugin</artifactId>
+      	<executions>
+      	  <execution>
+      	    <id>resources-custom</id>
+      	  </execution>
+      	  <execution>
+      	    <id>copy-resources-custom</id>
+      	  </execution>
+      	</executions>
       </plugin>
       <plugin>
       	<artifactId>maven-compiler-plugin</artifactId>
