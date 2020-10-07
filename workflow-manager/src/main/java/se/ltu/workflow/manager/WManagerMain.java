@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import se.arkalix.ArServiceCache;
 import se.arkalix.ArSystem;
 import se.arkalix.core.plugin.HttpJsonCloudPlugin;
+import se.arkalix.core.plugin.or.OrchestrationStrategy;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.dto.DtoEncoding;
 import se.arkalix.dto.DtoWritable;
@@ -112,7 +113,13 @@ public class WManagerMain {
                     .identity(identity)
                     .trustStore(trustStore)
                     .localSocketAddress(systemSocketAddress)
-                    .plugins(HttpJsonCloudPlugin.joinViaServiceRegistryAt(srSocketAddress))
+                    .plugins(new HttpJsonCloudPlugin.Builder()
+                            .serviceRegistrySocketAddress(srSocketAddress)
+                            .orchestrationStrategy(OrchestrationStrategy.STORED_THEN_DYNAMIC)
+                            .serviceRegistrationPredicate(service -> service.interfaces()
+                                    .stream()
+                                    .allMatch(i -> i.encoding().isDtoEncoding()))
+                            .build())
                     .serviceCache(ArServiceCache.withEntryLifetimeLimit(Duration.ofHours(1)))
                     .build();
             
@@ -120,8 +127,8 @@ public class WManagerMain {
             system.provide(new HttpService()
                     // Mandatory service configuration details.
                     .name(WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION)
-                    .encodings(EncodingDescriptor.JSON)
-                    // Could I have another AccessPolicy for any consumers?
+                    .encodings(EncodingDescriptor.getOrCreate("plain"))
+                    // Could I have another AccessPolicy for any consumers? as this service will not be registered
                     .accessPolicy(AccessPolicy.cloud())
                     .basePath(WManagerConstants.WMANAGER_URI)
                     
@@ -151,7 +158,6 @@ public class WManagerMain {
         
                         return Future.done();
                     }))
-            
                     .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION 
                             + " service is now being served"))
                     .ifFailure(Throwable.class, Throwable::printStackTrace)
@@ -247,7 +253,7 @@ public class WManagerMain {
         while(!timer.timeout()) {
             try {
                 // Future throws exception (java.net.ConnectException) when server not available
-                String result = client.send(serviceRegistrySocketAddress, new HttpClientRequest()
+                client.send(serviceRegistrySocketAddress, new HttpClientRequest()
                     .method(HttpMethod.GET)
                     .uri("serviceregistry/echo"))
                     .flatMap(response -> response.bodyAsString())
@@ -293,7 +299,7 @@ public class WManagerMain {
         timer.resetCount(Duration.ofMinutes(minutes));
         while(!timer.timeout()) {
             try {
-                String result = client.send(OrchestratorAddress, new HttpClientRequest()
+                client.send(OrchestratorAddress, new HttpClientRequest()
                     .method(HttpMethod.GET)
                     .uri("orchestrator/echo"))
                     .flatMap(response -> response.bodyAsString())
@@ -339,7 +345,7 @@ public class WManagerMain {
             timer.resetCount(Duration.ofMinutes(minutes));
             while(!timer.timeout()) {
                 try {
-                    String result = client.send(AuthorizationSocketAddress, new HttpClientRequest()
+                    client.send(AuthorizationSocketAddress, new HttpClientRequest()
                         .method(HttpMethod.GET)
                         .uri("authorization/echo"))
                         .flatMap(response -> response.bodyAsString())
