@@ -89,19 +89,22 @@ public class WManagerMain {
                     .trustStore(trustStore)
                     .build();
             
-            /* Check that the core systems are available - We want this call synchronous, as 
+            /* Check that the core systems are available - This call is synchronous, as 
              * initialization should not continue if they are not succesfull
              */
             checkCoreSystems(client,2);
 
             //TODO: Check that there are no more Workflow Managers in the workstation
+            
+            // Retrieve Workflow Manager properties to create Arrowhead system
             final String systemAddress = props.getProperty("server.address", "127.0.0.1");
             final int systemPort = props.getIntProperty("server.port", 8502);
             final var systemSocketAddress = new InetSocketAddress(systemAddress, systemPort);
             
+            // Retrieve Service Registry properties to register Arrowhead system
             final String serviceRegistryAddres = props.getProperty("sr_address","127.0.0.1");
             final int serviceRegistryPort = props.getIntProperty("sr_port", 8443);
-            // In demo we can use "service-registry.uni" as hostname of Service Registry?
+            // TODO: In demo we can use "service-registry.uni" as hostname of Service Registry?
             final var srSocketAddress = new InetSocketAddress(serviceRegistryAddres, serviceRegistryPort);
             
             // Create Arrowhead system
@@ -213,8 +216,9 @@ public class WManagerMain {
                                 + " request");
                         
                         //TODO: Check that consumer is a Smart Product authorized in the Factory
-                        request.consumer().identity().certificate();
-                        
+//                        request.consumer().identity().certificate();
+                        response
+                        .status(HttpStatus.OK);
                         // Dummy response
                         return Future.done();
                     }))
@@ -294,7 +298,6 @@ public class WManagerMain {
                     .uri("orchestrator/echo"))
                     .flatMap(response -> response.bodyAsString())
                     .ifSuccess(response -> {
-                        // If exception is not thrown, request was successful so end loop
                         timer.endCount();
                         if (!response.isEmpty()) {
                             logger.info("Orchestrator replied, core system is reachable");
@@ -326,22 +329,21 @@ public class WManagerMain {
             }
         }
         
+        // Authorization - In this case we could obtain the address and port from Orchestrator also
         if (props.getBooleanProperty("server.ssl.enabled", false)) {
-            // Authorization - In this case we could obtain the address and port from Orchestrator also
             final String AuthorizationAddres = props.getProperty("auth_address","127.0.0.1");
             final int AuthorizationPort = props.getIntProperty("auth_port", 8445);
             final var AuthorizationSocketAddress = new InetSocketAddress(AuthorizationAddres, AuthorizationPort);
+            logger.info("Testing connection with Authorization");
             
             timer.resetCount(Duration.ofMinutes(minutes));
             while(!timer.timeout()) {
-             // Send GET request to echo service
                 try {
                     String result = client.send(AuthorizationSocketAddress, new HttpClientRequest()
                         .method(HttpMethod.GET)
                         .uri("authorization/echo"))
                         .flatMap(response -> response.bodyAsString())
                         .ifSuccess(response -> {
-                            // If exception is not thrown, request was successful so end loop
                             timer.endCount();
                             if (!response.isEmpty()) {
                                 logger.info("Authorization replied, core system is reachable");
