@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
 
@@ -17,9 +18,9 @@ import se.arkalix.ArServiceCache;
 import se.arkalix.ArSystem;
 import se.arkalix.core.plugin.HttpJsonCloudPlugin;
 import se.arkalix.core.plugin.or.OrchestrationStrategy;
+import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.EncodingDescriptor;
-import se.arkalix.dto.DtoEncoding;
-import se.arkalix.dto.DtoWritable;
+import se.arkalix.descriptor.TransportDescriptor;
 import se.arkalix.net.http.HttpMethod;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.client.HttpClient;
@@ -27,15 +28,19 @@ import se.arkalix.net.http.client.HttpClientRequest;
 import se.arkalix.net.http.consumer.HttpConsumer;
 import se.arkalix.net.http.consumer.HttpConsumerRequest;
 import se.arkalix.net.http.service.HttpService;
+import se.arkalix.query.ServiceNotFoundException;
 import se.arkalix.security.access.AccessPolicy;
 import se.arkalix.security.identity.OwnedIdentity;
 import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
+import se.ltu.workflow.manager.dto.Workflow;
 import se.ltu.workflow.manager.dto.WorkflowDto;
 import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
+    
+    private static final Map<Workflow, ServiceDescription> WorkflowToExecutor = new ConcurrentHashMap<>();
     
     private static final Logger logger = LoggerFactory.getLogger(WManagerMain.class);
     
@@ -43,7 +48,7 @@ public class WManagerMain {
     
     static {
         final var logLevel = Level.INFO;
-        //System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tF %1$tT %4$s %5$s%6$s%n");
+        System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tF %1$tT %4$s %5$s%6$s%n");
         final var root = java.util.logging.Logger.getLogger("");
         root.setLevel(logLevel);
         for (final var handler : root.getHandlers()) {
@@ -179,20 +184,43 @@ public class WManagerMain {
                         logger.info("Receiving GET " + WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI 
                                 + " request");
                         
-                        List<WorkflowDto> workflows = new ArrayList<>();
+                        List<ServiceDescription> Wexecutors = new ArrayList<>();
                         
                         // Retrieve the workflows from the Workflow Executors
-                        // How to find more than one Workflow Executor?
                         system.consume()
                             .name(WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_SERVICE_DEFINITION)
                             .encodings(EncodingDescriptor.JSON)
+                            .transports(TransportDescriptor.HTTP)
+//                            .resolveAll() // How to find more than one Workflow Executor? Wait for library update
                             .using(HttpConsumer.factory())
-                            .flatMap(consumer -> consumer.send(new HttpConsumerRequest()
-                                .method(HttpMethod.GET)
-                                .uri(WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI)))
-                            .flatMap(responseConsume -> responseConsume.bodyAsList(WorkflowDto.class))
-                            .ifSuccess(workflow -> {
-                                workflows.addAll(workflow);
+                            .flatMap(consumer -> {
+                                // If in the future there would be multiple responses we would need to change this
+                                // Store the Wexecutor providing the service until we get the response
+                                Wexecutors.add(consumer.service());
+                                // Consume the service to obtain the workflows
+                                return consumer.send(new HttpConsumerRequest()
+                                    .method(HttpMethod.GET)
+                                    .uri(WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI));
+                                }
+                            )
+                            .flatMap(responseConsumer -> responseConsumer.bodyAsList(WorkflowDto.class))
+                            .ifSuccess(workflows -> {
+                                workflows.forEach(workflow -> {
+                                    ServiceDescription Wexecutor = Wexecutors.get(0);
+                                    WorkflowToExecutor.put(workflow, Wexecutor);
+                                    logger.info("Storing internally Worklfow: " + workflow.workflowName() +" from " + Wexecutor.provider().name() 
+                                            + " at " + Wexecutor.provider().socketAddress());
+                                });
+                                response
+                                .status(HttpStatus.OK)
+                                // Why workflows gives compilation error? is not a List<DtoWritable>?
+                                .body(List.copyOf(workflows));
+                            })
+                            .flatMapCatch(ServiceNotFoundException.class, exception -> {
+                                logger.error("No workflow-executor system offering services found in this local cloud, "
+                                        + "therefore this service fails to execute");
+                                response.status(HttpStatus.SERVICE_UNAVAILABLE);
+                                return Future.done();
                             })
                             .ifFailure(Throwable.class, throwable -> {
                                 // Exception as ServiceNotFound are handled here, giving the log errors and moving forward
@@ -200,21 +228,10 @@ public class WManagerMain {
                                         + WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI
                                         + " failed");
                                 throwable.printStackTrace();
+                                response.status(HttpStatus.INTERNAL_SERVER_ERROR);
                             }).await(); 
-                            
-                        // Add all the workflows retrieved to the response
-                        if(!workflows.isEmpty()) {
-                            response
-                                .status(HttpStatus.OK)
-                                .body((DtoWritable) workflows);
-                        }
-                        else {
-                            response
-                                .status(HttpStatus.NO_CONTENT);
-                        }
-
                         return Future.done();
-                    }).metadata(Map.ofEntries(Map.entry("http-method","GET-POST"),Map.entry("request-object-POST","workflow")))
+                    }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
                     
                     .post("/", (request, response) -> {
                         
@@ -227,7 +244,8 @@ public class WManagerMain {
                         .status(HttpStatus.OK);
                         // Dummy response
                         return Future.done();
-                    }))
+                    }).metadata((Map.ofEntries(Map.entry("http-method","POST"),Map.entry("request-object-POST","workflow")))))
+            
                     .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION 
                             + " service is now being served"))
                     .ifFailure(Throwable.class, Throwable::printStackTrace)
