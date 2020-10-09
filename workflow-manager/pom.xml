@@ -37,7 +37,7 @@
     
     <maven.jar.version>3.1.0</maven.jar.version>
     
-    <kalix.version>0.4.6</kalix.version>
+    <kalix.version>0.4.7</kalix.version>
   </properties>
 
   <dependencies>
