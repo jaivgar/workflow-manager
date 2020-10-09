@@ -5,8 +5,10 @@ import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
@@ -41,6 +43,7 @@ import se.ltu.workflow.manager.properties.TypeSafeProperties;
 public class WManagerMain {
     
     private static final Map<Workflow, ServiceDescription> WorkflowToExecutor = new ConcurrentHashMap<>();
+    private static final Set<String> validProducts = new HashSet<>();
     
     private static final Logger logger = LoggerFactory.getLogger(WManagerMain.class);
     
@@ -101,6 +104,14 @@ public class WManagerMain {
             checkCoreSystems(client,2);
 
             //TODO: Check that there are no more Workflow Managers in the workstation
+            
+            // Obtain the product names from config
+            final String productsConfig = props.getProperty("workflow_products", "product-1,product-2");
+            Arrays.stream(productsConfig.split(",")).forEach(productName -> {
+                var cleanProductName = productName.trim();
+                validProducts.add(cleanProductName);
+            });
+            logger.info("The pre-loaded products ID (in random order) are: " + validProducts);
             
             // Retrieve Workflow Manager properties to create Arrowhead system
             final String systemAddress = props.getProperty("server.address", "127.0.0.1");
@@ -239,10 +250,18 @@ public class WManagerMain {
                                 + " request");
                         
                         //TODO: Check that consumer is a Smart Product authorized in the Factory
-//                        request.consumer().identity().certificate();
-                        response
-                        .status(HttpStatus.OK);
-                        // Dummy response
+                        String consumerCertName = request.consumer().identity().certificate().getSubjectX500Principal().getName();
+                        
+                        // Future release will have a call to a factory system (MES) in charged of planning
+                        if (validProducts.contains(consumerCertName)){
+                            response
+                            .status(HttpStatus.OK);
+                        }
+                        else {
+                            response
+                            .status(HttpStatus.UNAUTHORIZED);
+                        }
+
                         return Future.done();
                     }).metadata((Map.ofEntries(Map.entry("http-method","POST"),Map.entry("request-object-POST","workflow")))))
             
