@@ -255,17 +255,20 @@ public class WManagerMain {
                         request
                             .bodyAs(WorkflowDto.class)
                             .flatMapCatch(ClassCastException.class, exception -> {
+                                logger.error("Wrong request input to service, mut be a valid workflow");
                                 response.status(HttpStatus.BAD_REQUEST);
                                 return Future.failure(exception);
                             })
                             .flatMap(workflowInput -> executeWorkflow(workflowInput, system))
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
+                                logger.error("Operation not available anymore, WExecutor system providing it"
+                                        + "is not present anymore");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                return Future.done();
+                                return Future.failure(exception);
                             })
                             .ifSuccess(workflow -> {
                                 response
-                                .status(HttpStatus.OK);
+                                .status(HttpStatus.CREATED);
                             })
                             
                             .ifFailure(Throwable.class, throwable -> 
@@ -478,30 +481,52 @@ public class WManagerMain {
                 });
             });
                 
-//                .flatMapCatch(ServiceNotFoundException.class, exception -> {
-//                    logger.error("No workflow-executor system offering services found in this local cloud,"
-//                            + " therefore this search failed");
-////                    response.status(HttpStatus.SERVICE_UNAVAILABLE);
-//                    return Future.done();
-//                })
-//                .ifFailure(Throwable.class, throwable -> {
-//                    logger.error("GET to " 
-//                            + WManagerConstants.WEXECUTOR_URI
-//                            + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
-//                    throwable.printStackTrace();
-////                    response.status(HttpStatus.INTERNAL_SERVER_ERROR);
-//                }).await();
+            // Example of how to process the Future of this method
+//            .flatMapCatch(ServiceNotFoundException.class, exception -> {
+//                logger.error("No workflow-executor system offering services found in this local cloud,"
+//                        + " therefore this search failed");
+//                response.status(HttpStatus.SERVICE_UNAVAILABLE);
+//                return Future.done();
+//            })
+//            .ifFailure(Throwable.class, throwable -> {
+//                logger.error("GET to " 
+//                        + WManagerConstants.WEXECUTOR_URI
+//                        + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
+//                throwable.printStackTrace();
+//                response.status(HttpStatus.INTERNAL_SERVER_ERROR);
+//            }).await();
 
     }
     
+    /**
+     * Finds WExecutor system providing requested workflow (if its present in workstation) 
+     * and consumes its service to start the workflow
+     * 
+     * @param w  Worfklow requested to start execution
+     * @param system  The Arrowhead system that ask for orchestration and consumes the WExecutor services
+     * @return A {@link Future} that can be successful or not, check for potential problems
+     * @throws ServiceNotFoundException when the WExecutor system providing service is not present at the
+     * local cloud anymore
+     */
     private static Future<?> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
-        // If workflow already in memory, proceed to call the Wexecutor with the input data
-        if (workflowToExecutor.containsKey(w)) {
+        /* Workflow unknown, call the updateWorkflows (same as GET /operations service) to update 
+         * the list of provided workflows
+         */
+        if (!workflowToExecutor.containsKey(w)) {
+            try {
+                updateWorkflows(system).await();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
             final var query = system.consume()
                 .name(WManagerConstants.EXECUTE_WORKFLOW_SERVICE_DEFINITION)
                 .encodings(EncodingDescriptor.JSON)
                 .transports(TransportDescriptor.HTTP);
             return query.resolveAll()
+                /* Filter all systems (WExecutors) providing service to execute workflows 
+                 * and get the right one
+                 */
                 .flatMap(services -> {
                     var service = services.stream()
                         // We already know which system provides the workflow service we want to consume
@@ -515,13 +540,16 @@ public class WManagerMain {
                     else {
                           logger.error("Workflow Executor system providing workflow \"" + w.workflowName()
                                   + "\" is missing in local cloud");
-                          // Remove mappings of WorkflowExecutor in memory (workflowToExecutor) if system is off
+                          /* Remove mappings of WorkflowExecutor in memory (workflowToExecutor) 
+                           * if system is off
+                           */
                           final var wExecutorOff = workflowToExecutor.get(w);
                           workflowToExecutor.entrySet()
                               .removeIf(entry -> entry.getValue().equals(wExecutorOff));
                           return Future.failure(new ServiceNotFoundException(query));
                     }                
                 })
+                // Send request to WExecutor to start the requested workflow
                 .ifSuccess(consumer -> consumer.send(new HttpConsumerRequest()
                         .method(HttpMethod.GET)
                         // The URI should come from the orchestrator
@@ -533,15 +561,7 @@ public class WManagerMain {
                                 .workflowConfig(w.workflowConfig())
                                 .build()))
                 );
-        }
-        // Workflow unknown, call the GET workflow service provided
-        else {
-            /* TODO: Trigger the get("/"... to search if there are new Workflow Executors that
-             * offer the workflow
-             */
-            
-            return Future.done();
-        }
+
     }
     
     private static class TimeCount {
