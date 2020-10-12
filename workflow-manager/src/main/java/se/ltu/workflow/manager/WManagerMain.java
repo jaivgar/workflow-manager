@@ -37,6 +37,7 @@ import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
 import se.ltu.workflow.manager.dto.Workflow;
+import se.ltu.workflow.manager.dto.WorkflowBuilder;
 import se.ltu.workflow.manager.dto.WorkflowDto;
 import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
@@ -69,10 +70,13 @@ public class WManagerMain {
         try {
             // Retrieve properties to set up keystore and truststore
             // The paths must start at the working directory
-            final char[] pKeyPassword = props.getProperty("server.ssl.key-password", "123456").toCharArray();
-            final char[] kStorePassword = props.getProperty("server.ssl.key-store-password", "123456").toCharArray();
+            final char[] pKeyPassword = props.getProperty("server.ssl.key-password", "123456")
+                    .toCharArray();
+            final char[] kStorePassword = props.getProperty("server.ssl.key-store-password", "123456").
+                    toCharArray();
             final String kStorePath = props.getProperty("server.ssl.key-store", "certificates/workflow_manager.p12");
-            final char[] tStorePassword = props.getProperty("server.ssl.trust-store-password", "123456").toCharArray();
+            final char[] tStorePassword = props.getProperty("server.ssl.trust-store-password", "123456")
+                    .toCharArray();
             final String tStorePath = props.getProperty("server.ssl.trust-store", "certificates/truststore.p12");
             
             // Load properties for system identity and truststore
@@ -174,8 +178,8 @@ public class WManagerMain {
         
                         return Future.done();
                     }))
-                    .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION 
-                            + " service is now being served"))
+                    .ifSuccess(handle -> logger.info("Workflow Manager "
+                            + WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION + " service is now being served"))
                     .ifFailure(Throwable.class, Throwable::printStackTrace)
                     // Without await service is not sucessfully registered
                     .await();
@@ -192,8 +196,9 @@ public class WManagerMain {
                     // HTTP GET endpoint that returns the workflows available in this workstation
                     .get("/", (request, response) -> {
                         
-                        logger.info("Receiving GET " + WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI 
-                                + " request");
+                        logger.info("Receiving GET "
+                                + WManagerConstants.WMANAGER_URI
+                                + WManagerConstants.WORKSTATION_WORKFLOW_URI + " request");
                         
                         List<ServiceDescription> Wexecutors = new ArrayList<>();
                         
@@ -211,7 +216,8 @@ public class WManagerMain {
                                 // Consume the service to obtain the workflows
                                 return consumer.send(new HttpConsumerRequest()
                                     .method(HttpMethod.GET)
-                                    .uri(WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI));
+                                    .uri(WManagerConstants.WEXECUTOR_URI
+                                            + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI));
                                 }
                             )
                             .flatMap(responseConsumer -> responseConsumer.bodyAsList(WorkflowDto.class))
@@ -219,8 +225,9 @@ public class WManagerMain {
                                 workflows.forEach(workflow -> {
                                     ServiceDescription Wexecutor = Wexecutors.get(0);
                                     WorkflowToExecutor.put(workflow, Wexecutor);
-                                    logger.info("Storing internally Worklfow: " + workflow.workflowName() +" from " + Wexecutor.provider().name() 
-                                            + " at " + Wexecutor.provider().socketAddress());
+                                    logger.info("Storing internally Worklfow: " + workflow.workflowName()
+                                        +" from " + Wexecutor.provider().name()
+                                        + " at " + Wexecutor.provider().socketAddress());
                                 });
                                 response
                                 .status(HttpStatus.OK)
@@ -228,16 +235,15 @@ public class WManagerMain {
                                 .body(List.copyOf(workflows));
                             })
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
-                                logger.error("No workflow-executor system offering services found in this local cloud, "
-                                        + "therefore this service fails to execute");
+                                logger.error("No workflow-executor system offering services found in this local cloud,"
+                                        + " therefore this service fails to execute");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();
                             })
                             .ifFailure(Throwable.class, throwable -> {
-                                // Exception as ServiceNotFound are handled here, giving the log errors and moving forward
                                 logger.error("GET to " 
-                                        + WManagerConstants.WEXECUTOR_URI + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI
-                                        + " failed");
+                                        + WManagerConstants.WEXECUTOR_URI
+                                        + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
                                 throwable.printStackTrace();
                                 response.status(HttpStatus.INTERNAL_SERVER_ERROR);
                             }).await(); 
@@ -246,16 +252,41 @@ public class WManagerMain {
                     
                     .post("/", (request, response) -> {
                         
-                        logger.info("Receiving POST " + WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI 
-                                + " request");
+                        logger.info("Receiving POST "
+                                + WManagerConstants.WMANAGER_URI
+                                + WManagerConstants.WORKSTATION_WORKFLOW_URI + " request");
                         
-                        //TODO: Check that consumer is a Smart Product authorized in the Factory
-                        String consumerCertName = request.consumer().identity().certificate().getSubjectX500Principal().getName();
+                        //Check that consumer is a Smart Product authorized in the Factory
+                        String consumerCertName = request
+                                .consumer()
+                                .identity()
+                                .certificate()
+                                .getSubjectX500Principal()
+                                .getName();
                         
-                        // Future release will have a call to a factory system (MES) in charged of planning
+                        // Future release will have a call to a factory system (MES) service in charge of planning
                         if (validProducts.contains(consumerCertName)){
-                            response
-                            .status(HttpStatus.OK);
+                            // If productID is correct, proceed to check input
+                            request
+                                .bodyAs(WorkflowDto.class)
+                                .flatMapCatch(ClassCastException.class, exception -> {
+                                    response.status(HttpStatus.BAD_REQUEST);
+                                    return Future.failure(exception);
+                                })
+                                .flatMap(workflow -> executeWorkflow(workflow, system))
+                                .flatMapCatch(ServiceNotFoundException.class, exception -> {
+                                    response.status(HttpStatus.SERVICE_UNAVAILABLE);
+                                    return Future.done();
+                                })
+                                .ifSuccess(workflow -> {
+                                    response
+                                    .status(HttpStatus.OK);
+                                })
+                                
+                                .ifFailure(Throwable.class, throwable -> 
+                                    logger.info("Wrong request (input) to service, mut be a valid workflow"))
+                                .await();
+                            
                         }
                         else {
                             response
@@ -263,12 +294,15 @@ public class WManagerMain {
                         }
 
                         return Future.done();
-                    }).metadata((Map.ofEntries(Map.entry("http-method","POST"),Map.entry("request-object-POST","workflow")))))
-            
-                    .ifSuccess(handle -> logger.info("Workflow Manager " + WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION 
-                            + " service is now being served"))
-                    .ifFailure(Throwable.class, Throwable::printStackTrace)
-                    .await();
+                    }).metadata((Map.ofEntries(
+                            Map.entry("http-method","POST"),
+                            Map.entry("request-object-POST","workflow"))))
+                )
+                .ifSuccess(handle -> logger.info("Workflow Manager "
+                        + WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION
+                        + " service is now being served"))
+                .ifFailure(Throwable.class, Throwable::printStackTrace)
+                .await();
             
         } catch (Exception e) {
             e.printStackTrace();
@@ -276,7 +310,8 @@ public class WManagerMain {
         
     }
     
-    private static void checkCoreSystems(HttpClient  client, int minutes) throws InterruptedException, TimeoutException {
+    private static void checkCoreSystems(HttpClient  client, int minutes)
+            throws InterruptedException, TimeoutException {
         
         TimeCount timer = new TimeCount(Duration.ofMinutes(minutes));
         
@@ -417,6 +452,56 @@ public class WManagerMain {
                     throw e;
                 }
             }
+        }
+    }
+    
+    private static Future<?> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
+        // If workflow already in memory, proceed to call the Wexecutor with the input data
+        if (WorkflowToExecutor.containsKey(w)) {
+            final var query = system.consume()
+                .name(WManagerConstants.EXECUTE_WORKFLOW_SERVICE_DEFINITION)
+                .encodings(EncodingDescriptor.JSON)
+                .transports(TransportDescriptor.HTTP);
+            return query.resolveAll()
+                .flatMap(services -> {
+                    var service = services.stream()
+                        // We already know which system provides the workflow service we want to consume
+                        .filter(serviceFound -> serviceFound.provider().socketAddress()
+                                .equals(WorkflowToExecutor.get(w).provider().socketAddress()))
+                        .findFirst();
+                    if(service.isPresent()){
+                      return Future.success(HttpConsumer.factory()
+                              .create(system, service.get(), List.of(EncodingDescriptor.JSON)));
+                    }
+                    else {
+                          logger.error("Workflow Executor system providing workflow \"" + w.workflowName()
+                                  + "\" is missing in local cloud");
+                          // Remove mappings of WorkflowExecutor in memory (WorkflowToExecutor) if system is off
+                          WorkflowToExecutor
+                              .entrySet()
+                              .removeIf(entry -> entry.getValue().equals(w));
+                          return Future.failure(new ServiceNotFoundException(query));
+                    }                
+                })
+                .ifSuccess(consumer -> consumer.send(new HttpConsumerRequest()
+                        .method(HttpMethod.GET)
+                        // The URI should come from the orchestrator
+                        .uri(consumer.service().uri())
+    //                            WManagerConstants.WEXECUTOR_URI
+    //                            + WManagerConstants.EXECUTE_WORKFLOW_URI));
+                        .body(new WorkflowBuilder()
+                                .workflowName(w.workflowName())
+                                .workflowConfig(w.workflowConfig())
+                                .build()))
+                );
+        }
+        // Workflow unknown, call the GET workflow service provided
+        else {
+            /* TODO: Trigger the get("/"... to search if there are new Workflow Executors that
+             * offer the workflow
+             */
+            
+            return Future.done();
         }
     }
     
