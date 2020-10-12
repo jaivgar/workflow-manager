@@ -109,8 +109,10 @@ public class WManagerMain {
 
             //TODO: Check that there are no more Workflow Managers in the workstation
             
-            // Obtain the product names from config
-            final String productsConfig = props.getProperty("workflow_products", "product-1,product-2");
+            /* Future release will have a call to a factory system (MES) service in charge of planning
+             * instead of a property in configuration file to know correct products ID
+             */
+            final String productsConfig = props.getProperty("workstation_products", "product-1,product-2");
             Arrays.stream(productsConfig.split(",")).forEach(productName -> {
                 var cleanProductName = productName.trim();
                 validProducts.add(cleanProductName);
@@ -164,7 +166,8 @@ public class WManagerMain {
                         return Future.done();
                     }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
             
-                     // HTTP DELETE endpoint that causes the application to exit.
+                    // ------------------------------------------------------
+                    // HTTP DELETE endpoint that causes the application to exit.
                     .delete(WManagerConstants.SHUTDOWN_URI, (request, response) -> {
                         response.status(HttpStatus.NO_CONTENT);
                         
@@ -250,48 +253,47 @@ public class WManagerMain {
                         return Future.done();
                     }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
                     
+                    // ------------------------------------------------------
                     .post("/", (request, response) -> {
                         
                         logger.info("Receiving POST "
                                 + WManagerConstants.WMANAGER_URI
                                 + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
-                        
-                        //Check that consumer is a Smart Product authorized in the Factory
-                        String consumerCertName = request
-                                .consumer()
-                                .identity()
-                                .certificate()
-                                .getSubjectX500Principal()
-                                .getName();
-                        
-                        // Future release will have a call to a factory system (MES) service in charge of planning
-                        if (validProducts.contains(consumerCertName)){
-                            // If productID is correct, proceed to check input
-                            request
-                                .bodyAs(WorkflowDto.class)
-                                .flatMapCatch(ClassCastException.class, exception -> {
-                                    response.status(HttpStatus.BAD_REQUEST);
-                                    return Future.failure(exception);
-                                })
-                                .flatMap(workflow -> executeWorkflow(workflow, system))
-                                .flatMapCatch(ServiceNotFoundException.class, exception -> {
-                                    response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                    return Future.done();
-                                })
-                                .ifSuccess(workflow -> {
-                                    response
-                                    .status(HttpStatus.OK);
-                                })
-                                
-                                .ifFailure(Throwable.class, throwable -> 
-                                    logger.info("Wrong request (input) to service, mut be a valid workflow"))
-                                .await();
+
+                        if (props.getBooleanProperty("workflow_manager_check_products", true)) {
+                            //Check that consumer is a Smart Product authorized in the Factory
+                            String consumerCertName = request
+                                    .consumer()
+                                    .identity()
+                                    .certificate()
+                                    .getSubjectX500Principal()
+                                    .getName();
                             
+                            // If productID not correct, do not proceed further
+                            if(!validProducts.contains(consumerCertName)) {
+                                response.status(HttpStatus.UNAUTHORIZED);
+                                return Future.done();
+                            }
                         }
-                        else {
-                            response
-                            .status(HttpStatus.UNAUTHORIZED);
-                        }
+                        request
+                            .bodyAs(WorkflowDto.class)
+                            .flatMapCatch(ClassCastException.class, exception -> {
+                                response.status(HttpStatus.BAD_REQUEST);
+                                return Future.failure(exception);
+                            })
+                            .flatMap(workflow -> executeWorkflow(workflow, system))
+                            .flatMapCatch(ServiceNotFoundException.class, exception -> {
+                                response.status(HttpStatus.SERVICE_UNAVAILABLE);
+                                return Future.done();
+                            })
+                            .ifSuccess(workflow -> {
+                                response
+                                .status(HttpStatus.OK);
+                            })
+                            
+                            .ifFailure(Throwable.class, throwable -> 
+                                logger.info("Wrong request (input) to service, mut be a valid workflow"))
+                            .await();
 
                         return Future.done();
                     }).metadata((Map.ofEntries(
@@ -454,6 +456,8 @@ public class WManagerMain {
             }
         }
     }
+    
+
     
     private static Future<?> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
         // If workflow already in memory, proceed to call the Wexecutor with the input data
