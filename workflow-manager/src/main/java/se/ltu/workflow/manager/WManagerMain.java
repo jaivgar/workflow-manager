@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,7 +44,7 @@ import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
     
-    private static final Map<Workflow, ServiceDescription> WorkflowToExecutor = new ConcurrentHashMap<>();
+    private static final Map<Workflow, ServiceDescription> workflowToExecutor = new ConcurrentHashMap<>();
     private static final Set<String> validProducts = new HashSet<>();
     
     private static final Logger logger = LoggerFactory.getLogger(WManagerMain.class);
@@ -198,48 +199,14 @@ public class WManagerMain {
                     
                     // HTTP GET endpoint that returns the workflows available in this workstation
                     .get("/", (request, response) -> {
-                        
                         logger.info("Receiving GET "
                                 + WManagerConstants.WMANAGER_URI
                                 + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
                         
-                        List<ServiceDescription> Wexecutors = new ArrayList<>();
-                        
-                        // Retrieve the workflows from the Workflow Executors
-                        system.consume()
-                            .name(WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_SERVICE_DEFINITION)
-                            .encodings(EncodingDescriptor.JSON)
-                            .transports(TransportDescriptor.HTTP)
-//                            .resolveAll() // How to find more than one Workflow Executor? Wait for library update
-                            .using(HttpConsumer.factory())
-                            .flatMap(consumer -> {
-                                // If in the future there would be multiple responses we would need to change this
-                                // Store the Wexecutor providing the service until we get the response
-                                Wexecutors.add(consumer.service());
-                                // Consume the service to obtain the workflows
-                                return consumer.send(new HttpConsumerRequest()
-                                    .method(HttpMethod.GET)
-                                    .uri(WManagerConstants.WEXECUTOR_URI
-                                            + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI));
-                                }
-                            )
-                            .flatMap(responseConsumer -> responseConsumer.bodyAsList(WorkflowDto.class))
-                            .ifSuccess(workflows -> {
-                                workflows.forEach(workflow -> {
-                                    ServiceDescription Wexecutor = Wexecutors.get(0);
-                                    WorkflowToExecutor.put(workflow, Wexecutor);
-                                    logger.info("Storing internally Worklfow: " + workflow.workflowName()
-                                        +" from " + Wexecutor.provider().name()
-                                        + " at " + Wexecutor.provider().socketAddress());
-                                });
-                                response
-                                .status(HttpStatus.OK)
-                                // Why workflows gives compilation error? is not a List<DtoWritable>?
-                                .body(List.copyOf(workflows));
-                            })
+                        updateWorkflows(system)
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
                                 logger.error("No workflow-executor system offering services found in this local cloud,"
-                                        + " therefore this service fails to execute");
+                                        + " therefore this search failed");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();
                             })
@@ -248,14 +215,24 @@ public class WManagerMain {
                                         + WManagerConstants.WEXECUTOR_URI
                                         + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
                                 throwable.printStackTrace();
-                                response.status(HttpStatus.INTERNAL_SERVER_ERROR);
-                            }).await(); 
+                                response.status(HttpStatus.INTERNAL_SERVER_ERROR);})
+                            .await();
+                        
+                        if (workflowToExecutor.isEmpty()) return Future.done();
+                            
+                        response.body(workflowToExecutor.keySet().stream()
+                                .map(workflow -> new WorkflowBuilder()
+                                    .workflowName(workflow.workflowName())
+                                    .workflowConfig(workflow.workflowConfig())
+                                    .build())
+                                .collect(Collectors.toList()))
+                            .status(HttpStatus.OK);
                         return Future.done();
+                        
                     }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
                     
                     // ------------------------------------------------------
                     .post("/", (request, response) -> {
-                        
                         logger.info("Receiving POST "
                                 + WManagerConstants.WMANAGER_URI
                                 + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
@@ -281,7 +258,7 @@ public class WManagerMain {
                                 response.status(HttpStatus.BAD_REQUEST);
                                 return Future.failure(exception);
                             })
-                            .flatMap(workflow -> executeWorkflow(workflow, system))
+                            .flatMap(workflowInput -> executeWorkflow(workflowInput, system))
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();
@@ -294,8 +271,8 @@ public class WManagerMain {
                             .ifFailure(Throwable.class, throwable -> 
                                 logger.info("Wrong request (input) to service, mut be a valid workflow"))
                             .await();
-
                         return Future.done();
+                        
                     }).metadata((Map.ofEntries(
                             Map.entry("http-method","POST"),
                             Map.entry("request-object-POST","workflow"))))
@@ -458,10 +435,68 @@ public class WManagerMain {
     }
     
 
+    /**
+     * Searches in local cloud for Workflow Executor systems offering workflows, consumes its
+     * services and adds the workflow to the internal memory in {@link #workflowToExecutor}
+     * 
+     * @param system the Arrowhead system doing the search
+     * @return  A {@link Future} that can be successful or not, check for potential problems
+     * as {@link ServiceNotFoundException}
+     */
+    private static Future<?> updateWorkflows(ArSystem system){
+        // We only care about the available workflows now, so delete old references
+        workflowToExecutor.clear();
+        
+        List<ServiceDescription> Wexecutors = new ArrayList<>();
+        
+        // Retrieve the workflows from the Workflow Executors
+        return system.consume()
+            .name(WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_SERVICE_DEFINITION)
+            .encodings(EncodingDescriptor.JSON)
+            .transports(TransportDescriptor.HTTP)
+//                .resolveAll() // How to find more than one Workflow Executor? Wait for library update
+            .using(HttpConsumer.factory())
+            .flatMap(consumer -> {
+                // If in the future there would be multiple responses we would need to change this
+                // Store the Wexecutor providing the service until we get the response
+                Wexecutors.add(consumer.service());
+                // Consume the service to obtain the workflows
+                return consumer.send(new HttpConsumerRequest()
+                    .method(HttpMethod.GET)
+                    .uri(WManagerConstants.WEXECUTOR_URI
+                            + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI));
+                }
+            )
+            .flatMap(responseConsumer -> responseConsumer.bodyAsList(WorkflowDto.class))
+            .ifSuccess(workflows -> {
+                workflows.forEach(workflow -> {
+                    ServiceDescription Wexecutor = Wexecutors.get(0);
+                    workflowToExecutor.put(workflow, Wexecutor);
+                    logger.info("Storing internally Worklfow: " + workflow.workflowName()
+                        +" from " + Wexecutor.provider().name()
+                        + " at " + Wexecutor.provider().socketAddress());
+                });
+            });
+                
+//                .flatMapCatch(ServiceNotFoundException.class, exception -> {
+//                    logger.error("No workflow-executor system offering services found in this local cloud,"
+//                            + " therefore this search failed");
+////                    response.status(HttpStatus.SERVICE_UNAVAILABLE);
+//                    return Future.done();
+//                })
+//                .ifFailure(Throwable.class, throwable -> {
+//                    logger.error("GET to " 
+//                            + WManagerConstants.WEXECUTOR_URI
+//                            + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
+//                    throwable.printStackTrace();
+////                    response.status(HttpStatus.INTERNAL_SERVER_ERROR);
+//                }).await();
+
+    }
     
     private static Future<?> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
         // If workflow already in memory, proceed to call the Wexecutor with the input data
-        if (WorkflowToExecutor.containsKey(w)) {
+        if (workflowToExecutor.containsKey(w)) {
             final var query = system.consume()
                 .name(WManagerConstants.EXECUTE_WORKFLOW_SERVICE_DEFINITION)
                 .encodings(EncodingDescriptor.JSON)
@@ -471,7 +506,7 @@ public class WManagerMain {
                     var service = services.stream()
                         // We already know which system provides the workflow service we want to consume
                         .filter(serviceFound -> serviceFound.provider().socketAddress()
-                                .equals(WorkflowToExecutor.get(w).provider().socketAddress()))
+                                .equals(workflowToExecutor.get(w).provider().socketAddress()))
                         .findFirst();
                     if(service.isPresent()){
                       return Future.success(HttpConsumer.factory()
@@ -480,10 +515,10 @@ public class WManagerMain {
                     else {
                           logger.error("Workflow Executor system providing workflow \"" + w.workflowName()
                                   + "\" is missing in local cloud");
-                          // Remove mappings of WorkflowExecutor in memory (WorkflowToExecutor) if system is off
-                          WorkflowToExecutor
-                              .entrySet()
-                              .removeIf(entry -> entry.getValue().equals(w));
+                          // Remove mappings of WorkflowExecutor in memory (workflowToExecutor) if system is off
+                          final var wExecutorOff = workflowToExecutor.get(w);
+                          workflowToExecutor.entrySet()
+                              .removeIf(entry -> entry.getValue().equals(wExecutorOff));
                           return Future.failure(new ServiceNotFoundException(query));
                     }                
                 })
