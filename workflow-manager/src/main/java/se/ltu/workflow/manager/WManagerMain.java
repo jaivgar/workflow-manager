@@ -8,9 +8,11 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -24,12 +26,14 @@ import se.arkalix.core.plugin.or.OrchestrationStrategy;
 import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.descriptor.TransportDescriptor;
+import se.arkalix.dto.DtoEncoding;
 import se.arkalix.net.http.HttpMethod;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.client.HttpClient;
 import se.arkalix.net.http.client.HttpClientRequest;
 import se.arkalix.net.http.consumer.HttpConsumer;
 import se.arkalix.net.http.consumer.HttpConsumerRequest;
+import se.arkalix.net.http.consumer.HttpConsumerResponse;
 import se.arkalix.net.http.service.HttpService;
 import se.arkalix.query.ServiceNotFoundException;
 import se.arkalix.security.access.AccessPolicy;
@@ -37,6 +41,8 @@ import se.arkalix.security.identity.OwnedIdentity;
 import se.arkalix.security.identity.TrustStore;
 import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
+import se.ltu.workflow.manager.dto.QueuedWorkflowDto;
+import se.ltu.workflow.manager.dto.StartOperationBuilder;
 import se.ltu.workflow.manager.dto.Workflow;
 import se.ltu.workflow.manager.dto.WorkflowBuilder;
 import se.ltu.workflow.manager.dto.WorkflowDto;
@@ -44,8 +50,20 @@ import se.ltu.workflow.manager.properties.TypeSafeProperties;
 
 public class WManagerMain {
     
+    /**
+     * Relates each workflow with the Workflow Executor system that offers it
+     */
     private static final Map<Workflow, ServiceDescription> workflowToExecutor = new ConcurrentHashMap<>();
+    
+    /**
+     * Keeps the ID of smart products authorized to use certain services
+     */
     private static final Set<String> validProducts = new HashSet<>();
+    
+    /**
+     * Keeps the count of the operations requested to this system
+     */
+    private static final AtomicInteger operationId = new AtomicInteger(0);
     
     private static final Logger logger = LoggerFactory.getLogger(WManagerMain.class);
     
@@ -208,8 +226,7 @@ public class WManagerMain {
                                 logger.error("No workflow-executor system offering services found in this local cloud,"
                                         + " therefore this search failed");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                return Future.done();
-                            })
+                                return Future.done();})
                             .ifFailure(Throwable.class, throwable -> {
                                 logger.error("GET to " 
                                         + WManagerConstants.WEXECUTOR_URI
@@ -237,43 +254,64 @@ public class WManagerMain {
                                 + WManagerConstants.WMANAGER_URI
                                 + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
 
+                        Optional<String> consumerCertName = Optional.empty();
                         if (props.getBooleanProperty("workflow_manager_check_products", true)) {
                             //Check that consumer is a Smart Product authorized in the Factory
-                            String consumerCertName = request
+                            consumerCertName = Optional.of(request
                                     .consumer()
                                     .identity()
                                     .certificate()
                                     .getSubjectX500Principal()
-                                    .getName();
+                                    .getName());
                             
                             // If productID not correct, do not proceed further
-                            if(!validProducts.contains(consumerCertName)) {
+                            if(!validProducts.contains(consumerCertName.get())) {
                                 response.status(HttpStatus.UNAUTHORIZED);
                                 return Future.done();
                             }
                         }
-                        request
+                        final var test1 = request
                             .bodyAs(WorkflowDto.class)
                             .flatMapCatch(ClassCastException.class, exception -> {
                                 logger.error("Wrong request input to service, mut be a valid workflow");
                                 response.status(HttpStatus.BAD_REQUEST);
-                                return Future.failure(exception);
-                            })
+                                return Future.failure(exception);})
+                            .await();
+                        logger.info("The input conversion to DTO was finished");
+                        final var operation = Future.success(test1)
                             .flatMap(workflowInput -> executeWorkflow(workflowInput, system))
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
                                 logger.error("Operation not available anymore, WExecutor system providing it"
                                         + "is not present anymore");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                return Future.failure(exception);
-                            })
-                            .ifSuccess(workflow -> {
-                                response
-                                .status(HttpStatus.CREATED);
-                            })
-                            
-                            .ifFailure(Throwable.class, throwable -> 
-                                logger.info("Wrong request (input) to service, mut be a valid workflow"))
+                                return Future.failure(exception);})
+                            .flatMap(queuedWorkflow -> queuedWorkflow.bodyAs(QueuedWorkflowDto.class))
+                            .flatMapCatch(ClassCastException.class, exception -> {
+                                logger.error("Wrong response from Workflow Executor, workflow unavailable");
+                                response.status(HttpStatus.SERVICE_UNAVAILABLE);
+                                return Future.failure(exception);})
+                            .ifFailure(Throwable.class, throwable -> {
+                                logger.info("Error processing POST service request at"
+                                        + WManagerConstants.WMANAGER_URI
+                                        + WManagerConstants.WORKSTATION_OPERATIONS_URI);
+                                throwable.printStackTrace();})
                             .await();
+                        
+                        consumerCertName.
+                            ifPresentOrElse(productID -> 
+                                response
+                                    .status(HttpStatus.CREATED)
+                                    .body(new StartOperationBuilder()
+                                            .operationId(operationId.incrementAndGet())
+                                            .productId(productID)
+                                            .operationName(operation.workflowName())
+                                          .build()), 
+                            () -> response
+                                    .status(HttpStatus.CREATED)
+                                    .body(new StartOperationBuilder()
+                                            .operationId(operationId.incrementAndGet())
+                                            .operationName(operation.workflowName())
+                                            .build()));
                         return Future.done();
                         
                     }).metadata((Map.ofEntries(
@@ -289,7 +327,6 @@ public class WManagerMain {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        
     }
     
     private static void checkCoreSystems(HttpClient  client, int minutes)
@@ -446,7 +483,9 @@ public class WManagerMain {
      * @return  A {@link Future} that can be successful or not, check for potential problems
      * as {@link ServiceNotFoundException}
      */
-    private static Future<?> updateWorkflows(ArSystem system){
+    private static Future<List<WorkflowDto>> updateWorkflows(ArSystem system){
+        logger.info("Start lookup of all workflows offered in this local cloud (workstation)");
+        
         // We only care about the available workflows now, so delete old references
         workflowToExecutor.clear();
         
@@ -508,7 +547,9 @@ public class WManagerMain {
      * @throws ServiceNotFoundException when the WExecutor system providing service is not present at the
      * local cloud anymore
      */
-    private static Future<?> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
+    private static Future<HttpConsumerResponse> executeWorkflow(Workflow w, ArSystem system ) throws ServiceNotFoundException{
+        logger.info("Start request to execute workflow corresponding to operation");
+        
         /* Workflow unknown, call the updateWorkflows (same as GET /operations service) to update 
          * the list of provided workflows
          */
@@ -550,7 +591,7 @@ public class WManagerMain {
                     }                
                 })
                 // Send request to WExecutor to start the requested workflow
-                .ifSuccess(consumer -> consumer.send(new HttpConsumerRequest()
+                .flatMap(consumer -> consumer.send(new HttpConsumerRequest()
                         .method(HttpMethod.GET)
                         // The URI should come from the orchestrator
                         .uri(consumer.service().uri())

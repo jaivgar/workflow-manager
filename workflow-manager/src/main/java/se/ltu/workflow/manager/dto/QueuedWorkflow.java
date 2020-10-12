@@ -19,7 +19,6 @@ public interface QueuedWorkflow {
     
     WStatus workflowStatus();
     
-    // Wait till Kalix library update
     ZonedDateTime queueTime();
     
     ZonedDateTime startTime();
