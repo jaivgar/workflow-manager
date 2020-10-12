@@ -17,11 +17,12 @@ public class WManagerConstants {
     
     public static final String WMANAGER_URI = "/workflow_manager";
     
-    public static final String WMANAGER_ECHO_SERVICE_DEFINITION = "wmanager-echo";
+    public static final String WMANAGER_TOOLS_SERVICE_DEFINITION = "wmanager-runtime";
     public static final String ECHO_URI = "/echo";
+    public static final String SHUTDOWN_URI = "/shutdown";
     
-    public static final String WORKSTATION_WORKFLOW_SERVICE_DEFINITION = "wmanager-workstation-workflows";
-    public static final String WORKSTATION_WORKFLOW_URI = "/workflows";
+    public static final String WORKSTATION_OPERATIONS_SERVICE_DEFINITION = "wmanager-workstation-operations";
+    public static final String WORKSTATION_OPERATIONS_URI = "/operations";
     
     // Workflow Executor constants
     public static final String WEXECUTOR_URI = "/workflow-executor";

@@ -146,7 +146,7 @@ public class WManagerMain {
             // Add Echo HTTP Service to Arrowhead system
             system.provide(new HttpService()
                     // Mandatory service configuration details.
-                    .name(WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION)
+                    .name(WManagerConstants.WMANAGER_TOOLS_SERVICE_DEFINITION)
                     .encodings(EncodingDescriptor.getOrCreate("plain"))
                     // Could I have another AccessPolicy for any consumers? as this service will not be registered
                     .accessPolicy(AccessPolicy.cloud())
@@ -165,7 +165,7 @@ public class WManagerMain {
                     }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
             
                      // HTTP DELETE endpoint that causes the application to exit.
-                    .delete("/runtime", (request, response) -> {
+                    .delete(WManagerConstants.SHUTDOWN_URI, (request, response) -> {
                         response.status(HttpStatus.NO_CONTENT);
                         
                         //Shutdown server and unregisters (dismiss) the services using the HttpJsonCloudPlugin
@@ -179,7 +179,7 @@ public class WManagerMain {
                         return Future.done();
                     }))
                     .ifSuccess(handle -> logger.info("Workflow Manager "
-                            + WManagerConstants.WMANAGER_ECHO_SERVICE_DEFINITION + " service is now being served"))
+                            + WManagerConstants.WMANAGER_TOOLS_SERVICE_DEFINITION + " service is now being served"))
                     .ifFailure(Throwable.class, Throwable::printStackTrace)
                     // Without await service is not sucessfully registered
                     .await();
@@ -187,18 +187,18 @@ public class WManagerMain {
             // Add Workflows HTTP Service to Workflow Manager system
             system.provide(new HttpService()
                     // Mandatory service configuration details.
-                    .name(WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION)
+                    .name(WManagerConstants.WORKSTATION_OPERATIONS_SERVICE_DEFINITION)
                     .encodings(EncodingDescriptor.JSON)
                     // Could I have another AccessPolicy for intercloud consumers?
                     .accessPolicy(AccessPolicy.cloud())
-                    .basePath(WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_WORKFLOW_URI)
+                    .basePath(WManagerConstants.WMANAGER_URI + WManagerConstants.WORKSTATION_OPERATIONS_URI)
                     
                     // HTTP GET endpoint that returns the workflows available in this workstation
                     .get("/", (request, response) -> {
                         
                         logger.info("Receiving GET "
                                 + WManagerConstants.WMANAGER_URI
-                                + WManagerConstants.WORKSTATION_WORKFLOW_URI + " request");
+                                + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
                         
                         List<ServiceDescription> Wexecutors = new ArrayList<>();
                         
@@ -254,7 +254,7 @@ public class WManagerMain {
                         
                         logger.info("Receiving POST "
                                 + WManagerConstants.WMANAGER_URI
-                                + WManagerConstants.WORKSTATION_WORKFLOW_URI + " request");
+                                + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
                         
                         //Check that consumer is a Smart Product authorized in the Factory
                         String consumerCertName = request
@@ -299,7 +299,7 @@ public class WManagerMain {
                             Map.entry("request-object-POST","workflow"))))
                 )
                 .ifSuccess(handle -> logger.info("Workflow Manager "
-                        + WManagerConstants.WORKSTATION_WORKFLOW_SERVICE_DEFINITION
+                        + WManagerConstants.WORKSTATION_OPERATIONS_SERVICE_DEFINITION
                         + " service is now being served"))
                 .ifFailure(Throwable.class, Throwable::printStackTrace)
                 .await();
