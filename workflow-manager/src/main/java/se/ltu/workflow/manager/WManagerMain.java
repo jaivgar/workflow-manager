@@ -27,6 +27,7 @@ import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.descriptor.TransportDescriptor;
 import se.arkalix.dto.DtoEncoding;
+import se.arkalix.dto.DtoReadException;
 import se.arkalix.net.http.HttpMethod;
 import se.arkalix.net.http.HttpStatus;
 import se.arkalix.net.http.client.HttpClient;
@@ -270,49 +271,59 @@ public class WManagerMain {
                                 return Future.done();
                             }
                         }
-                        final var test1 = request
+                        final Optional<String> certNameAuthorized = consumerCertName;
+                        
+                        /* If we do not return the request Future, then we can not modify the response 
+                         * inside the processing calls of the request, as it is executed after the POST
+                         * service finished and the method will throw "IllegalStateException: HTTP route 
+                         * POST never set a status code"
+                         */
+                        return request
                             .bodyAs(WorkflowDto.class)
-                            .flatMapCatch(ClassCastException.class, exception -> {
+                            .flatMap(workflowInput -> executeWorkflow(workflowInput, system))
+                            .flatMap(queuedWorkflow -> queuedWorkflow.bodyAs(QueuedWorkflowDto.class))
+                            .ifSuccess(queudWorkflowAnswer -> {
+                                certNameAuthorized.
+                                    ifPresentOrElse(productID -> 
+                                        response
+                                            .status(HttpStatus.CREATED)
+                                            .body(new StartOperationBuilder()
+                                                    .operationId(operationId.incrementAndGet())
+                                                    .productId(productID)
+                                                    .operationName(queudWorkflowAnswer.workflowName())
+                                                  .build()), 
+                                    () -> response
+                                            .status(HttpStatus.CREATED)
+                                            .body(new StartOperationBuilder()
+                                                    .operationId(operationId.incrementAndGet())
+                                                    .operationName(queudWorkflowAnswer.workflowName())
+                                                    .build()));
+                            })
+                            .flatMapCatch(DtoReadException.class, exception -> {
                                 logger.error("Wrong request input to service, mut be a valid workflow");
                                 response.status(HttpStatus.BAD_REQUEST);
-                                return Future.failure(exception);})
-                            .await();
-                        logger.info("The input conversion to DTO was finished");
-                        final var operation = Future.success(test1)
-                            .flatMap(workflowInput -> executeWorkflow(workflowInput, system))
+                                // To find the errors in DTO input
+                                exception.printStackTrace();
+                                return Future.done();})
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
                                 logger.error("Operation not available anymore, WExecutor system providing it"
                                         + "is not present anymore");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                return Future.failure(exception);})
-                            .flatMap(queuedWorkflow -> queuedWorkflow.bodyAs(QueuedWorkflowDto.class))
+                                return Future.done();})
                             .flatMapCatch(ClassCastException.class, exception -> {
                                 logger.error("Wrong response from Workflow Executor, workflow unavailable");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
-                                return Future.failure(exception);})
+                                return Future.done();})
                             .ifFailure(Throwable.class, throwable -> {
-                                logger.info("Error processing POST service request at"
+                                logger.info("Error processing POST service request at "
                                         + WManagerConstants.WMANAGER_URI
                                         + WManagerConstants.WORKSTATION_OPERATIONS_URI);
-                                throwable.printStackTrace();})
-                            .await();
-                        
-                        consumerCertName.
-                            ifPresentOrElse(productID -> 
-                                response
-                                    .status(HttpStatus.CREATED)
-                                    .body(new StartOperationBuilder()
-                                            .operationId(operationId.incrementAndGet())
-                                            .productId(productID)
-                                            .operationName(operation.workflowName())
-                                          .build()), 
-                            () -> response
-                                    .status(HttpStatus.CREATED)
-                                    .body(new StartOperationBuilder()
-                                            .operationId(operationId.incrementAndGet())
-                                            .operationName(operation.workflowName())
-                                            .build()));
-                        return Future.done();
+                                response.clearBody().status(HttpStatus.INTERNAL_SERVER_ERROR);
+                                throwable.printStackTrace();});
+                            /* Need a onResult() or onFailure() to assure Future execution if this
+                             * Future is not return
+                             */
+//                            .onFailure(throwable -> {})
                         
                     }).metadata((Map.ofEntries(
                             Map.entry("http-method","POST"),
@@ -323,6 +334,9 @@ public class WManagerMain {
                         + " service is now being served"))
                 .ifFailure(Throwable.class, Throwable::printStackTrace)
                 .await();
+            
+            //TODO: Add service to receive Workflow Executor results that receive(something) and sends a OperationResultDTO
+//            system.provide(new HttpService()
             
         } catch (Exception e) {
             e.printStackTrace();
