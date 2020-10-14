@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.stream.Collectors;
 
@@ -26,7 +27,6 @@ import se.arkalix.core.plugin.or.OrchestrationStrategy;
 import se.arkalix.description.ServiceDescription;
 import se.arkalix.descriptor.EncodingDescriptor;
 import se.arkalix.descriptor.TransportDescriptor;
-import se.arkalix.dto.DtoEncoding;
 import se.arkalix.dto.DtoReadException;
 import se.arkalix.net.http.HttpMethod;
 import se.arkalix.net.http.HttpStatus;
@@ -71,12 +71,18 @@ public class WManagerMain {
     private static final TypeSafeProperties props = TypeSafeProperties.getProp();
     
     static {
-        final var logLevel = Level.INFO;
+        final var logLevelRoot = Level.INFO;
         System.setProperty("java.util.logging.SimpleFormatter.format", "%1$tF %1$tT %4$s %5$s%6$s%n");
         final var root = java.util.logging.Logger.getLogger("");
-        root.setLevel(logLevel);
+        root.setLevel(logLevelRoot);
+        
+        // Logger not working yet
+        final var logLevelKalix = Level.ALL;
+        final var kalix = java.util.logging.Logger.getLogger("se.arkalix");
+        kalix.setLevel(logLevelKalix);
+        
         for (final var handler : root.getHandlers()) {
-            handler.setLevel(logLevel);
+            handler.setLevel(Level.ALL);
         }
     }
 
@@ -228,13 +234,12 @@ public class WManagerMain {
                                         + " therefore this search failed");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();})
-                            .ifFailure(Throwable.class, throwable -> {
+                            .onFailure(throwable -> {
                                 logger.error("GET to " 
                                         + WManagerConstants.WEXECUTOR_URI
                                         + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
                                 throwable.printStackTrace();
-                                response.status(HttpStatus.INTERNAL_SERVER_ERROR);})
-                            .await();
+                                response.status(HttpStatus.INTERNAL_SERVER_ERROR);});
                         
                         if (workflowToExecutor.isEmpty()) return Future.done();
                             
@@ -567,55 +572,53 @@ public class WManagerMain {
         /* Workflow unknown, call the updateWorkflows (same as GET /operations service) to update 
          * the list of provided workflows
          */
-        if (!workflowToExecutor.containsKey(w)) {
-            try {
-                updateWorkflows(system).await();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+        if (workflowToExecutor.containsKey(w)) {
+            updateWorkflows(system)
+                .onFailure(throwable ->
+                    logger.error("Workflow was not found in local cloud, can not execute it"));;
         }
-            final var query = system.consume()
-                .name(WManagerConstants.EXECUTE_WORKFLOW_SERVICE_DEFINITION)
-                .encodings(EncodingDescriptor.JSON)
-                .transports(TransportDescriptor.HTTP);
-            return query.resolveAll()
-                /* Filter all systems (WExecutors) providing service to execute workflows 
-                 * and get the right one
-                 */
-                .flatMap(services -> {
-                    var service = services.stream()
-                        // We already know which system provides the workflow service we want to consume
-                        .filter(serviceFound -> serviceFound.provider().socketAddress()
-                                .equals(workflowToExecutor.get(w).provider().socketAddress()))
-                        .findFirst();
-                    if(service.isPresent()){
-                      return Future.success(HttpConsumer.factory()
-                              .create(system, service.get(), List.of(EncodingDescriptor.JSON)));
-                    }
-                    else {
-                          logger.error("Workflow Executor system providing workflow \"" + w.workflowName()
-                                  + "\" is missing in local cloud");
-                          /* Remove mappings of WorkflowExecutor in memory (workflowToExecutor) 
-                           * if system is off
-                           */
-                          final var wExecutorOff = workflowToExecutor.get(w);
-                          workflowToExecutor.entrySet()
-                              .removeIf(entry -> entry.getValue().equals(wExecutorOff));
-                          return Future.failure(new ServiceNotFoundException(query));
-                    }                
-                })
-                // Send request to WExecutor to start the requested workflow
-                .flatMap(consumer -> consumer.send(new HttpConsumerRequest()
-                        .method(HttpMethod.GET)
-                        // The URI should come from the orchestrator
-                        .uri(consumer.service().uri())
-    //                            WManagerConstants.WEXECUTOR_URI
-    //                            + WManagerConstants.EXECUTE_WORKFLOW_URI));
-                        .body(new WorkflowBuilder()
-                                .workflowName(w.workflowName())
-                                .workflowConfig(w.workflowConfig())
-                                .build()))
-                );
+        final var query = system.consume()
+            .name(WManagerConstants.EXECUTE_WORKFLOW_SERVICE_DEFINITION)
+            .encodings(EncodingDescriptor.JSON)
+            .transports(TransportDescriptor.HTTP);
+        return query.resolveAll()
+            /* Filter all systems (WExecutors) providing service to execute workflows 
+             * and get the right one
+             */
+            .flatMap(services -> {
+                var service = services.stream()
+                    // We already know which system provides the workflow service we want to consume
+                    .filter(serviceFound -> serviceFound.provider().socketAddress()
+                            .equals(workflowToExecutor.get(w).provider().socketAddress()))
+                    .findFirst();
+                if(service.isPresent()){
+                  return Future.success(HttpConsumer.factory()
+                          .create(system, service.get(), List.of(EncodingDescriptor.JSON)));
+                }
+                else {
+                      logger.error("Workflow Executor system providing workflow \"" + w.workflowName()
+                              + "\" is missing in local cloud");
+                      /* Remove mappings of WorkflowExecutor in memory (workflowToExecutor) 
+                       * if system is off
+                       */
+                      final var wExecutorOff = workflowToExecutor.get(w);
+                      workflowToExecutor.entrySet()
+                          .removeIf(entry -> entry.getValue().equals(wExecutorOff));
+                      return Future.failure(new ServiceNotFoundException(query));
+                }                
+            })
+            // Send request to WExecutor to start the requested workflow
+            .flatMap(consumer -> consumer.send(new HttpConsumerRequest()
+                    .method(HttpMethod.GET)
+                    // The URI should come from the orchestrator
+                    .uri(consumer.service().uri())
+//                            WManagerConstants.WEXECUTOR_URI
+//                            + WManagerConstants.EXECUTE_WORKFLOW_URI));
+                    .body(new WorkflowBuilder()
+                            .workflowName(w.workflowName())
+                            .workflowConfig(w.workflowConfig())
+                            .build()))
+            );
 
     }
     
