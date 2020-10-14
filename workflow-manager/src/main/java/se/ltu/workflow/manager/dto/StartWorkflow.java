@@ -11,7 +11,7 @@ import java.time.ZonedDateTime;
 @DtoReadableAs(JSON)
 @DtoWritableAs(JSON)
 @DtoToString
-public interface QueuedWorkflow {
+public interface StartWorkflow {
     
     int id();
     
@@ -20,9 +20,5 @@ public interface QueuedWorkflow {
     WStatus workflowStatus();
     
     ZonedDateTime queueTime();
-    
-    ZonedDateTime startTime();
-    
-    ZonedDateTime endTime();
 
 }
