@@ -250,29 +250,27 @@ public class WManagerMain {
                                 + WManagerConstants.WMANAGER_URI
                                 + WManagerConstants.WORKSTATION_OPERATIONS_URI + " request");
                         
-                        updateWorkflows(system)
+                        return updateWorkflows(system)
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
                                 logger.error("No workflow-executor system, offering services, found in "
                                         + "this local cloud, therefore this search failed");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();})
-                            .onFailure(throwable -> {
+                            .ifSuccess(ignore ->
+                                response
+                                    .body(workflowsInWorkstation.stream()
+                                        .map(workflow -> new WorkflowBuilder()
+                                            .workflowName(workflow.workflowName())
+                                            .workflowConfig(workflow.workflowConfig())
+                                            .build())
+                                        .collect(Collectors.toList()))
+                                    .status(HttpStatus.OK))
+                            .ifFailure(Throwable.class, throwable -> {
                                 logger.error("GET to " 
                                         + WManagerConstants.WEXECUTOR_URI
                                         + WManagerConstants.PROVIDE_AVAILABLE_WORKFLOW_URI + " failed");
                                 throwable.printStackTrace();
                                 response.status(HttpStatus.INTERNAL_SERVER_ERROR);});
-                        
-                        if (workflowToExecutor.isEmpty()) return Future.done();
-                            
-                        response.body(workflowsInWorkstation.stream()
-                                .map(workflow -> new WorkflowBuilder()
-                                    .workflowName(workflow.workflowName())
-                                    .workflowConfig(workflow.workflowConfig())
-                                    .build())
-                                .collect(Collectors.toList()))
-                            .status(HttpStatus.OK);
-                        return Future.done();
                         
                     }).metadata(Map.ofEntries(Map.entry("http-method","GET")))
                     
