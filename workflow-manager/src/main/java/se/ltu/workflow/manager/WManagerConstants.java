@@ -24,6 +24,9 @@ public class WManagerConstants {
     public static final String WORKSTATION_OPERATIONS_SERVICE_DEFINITION = "wmanager-workstation-operations";
     public static final String WORKSTATION_OPERATIONS_URI = "/operations";
     
+    public static final String WMANAGER_OP_RESULTS_SERVICE_DEFINITION = "wmanager-operation-results";
+    public static final String WMANAGER_OP_RESULTS_URI = "/results";
+    
     // Workflow Executor constants
     public static final String WEXECUTOR_URI = "/workflow-executor";
     

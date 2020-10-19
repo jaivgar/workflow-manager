@@ -22,11 +22,11 @@ public interface FinishWorkflow {
     
     String workflowName();
     
+    WStatus workflowStatus();
+    
     Boolean success();
 
     Optional<String> errorMessage();
-    
-    WStatus workflowStatus();
     
     ZonedDateTime queueTime();
     

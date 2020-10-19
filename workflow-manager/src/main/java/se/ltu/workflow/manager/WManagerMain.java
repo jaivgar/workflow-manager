@@ -37,6 +37,7 @@ import se.arkalix.net.http.consumer.HttpConsumerRequest;
 import se.arkalix.net.http.consumer.HttpConsumerResponse;
 import se.arkalix.net.http.service.HttpService;
 import se.arkalix.net.http.service.HttpServiceRequest;
+import se.arkalix.net.http.service.HttpServiceResponse;
 import se.arkalix.query.ServiceNotFoundException;
 import se.arkalix.query.ServiceQuery;
 import se.arkalix.security.access.AccessPolicy;
@@ -46,6 +47,7 @@ import se.arkalix.util.concurrent.Future;
 import se.arkalix.util.concurrent.Schedulers;
 import se.ltu.workflow.manager.arrowhead.AFCoreSystems;
 import se.ltu.workflow.manager.arrowhead.SmartProduct;
+import se.ltu.workflow.manager.dto.FinishWorkflowDto;
 import se.ltu.workflow.manager.dto.StartOperationBuilder;
 import se.ltu.workflow.manager.dto.Workflow;
 import se.ltu.workflow.manager.dto.WorkflowBuilder;
@@ -196,7 +198,7 @@ public class WManagerMain {
             system.provide(new HttpService()
                     // Mandatory service configuration details.
                     .name(WManagerConstants.WMANAGER_TOOLS_SERVICE_DEFINITION)
-                    .encodings(EncodingDescriptor.getOrCreate("plain"))
+                    .encodings(EncodingDescriptor.JSON)
                     // Could I have another AccessPolicy for any consumers? as this service will not be registered
                     .accessPolicy(AccessPolicy.cloud())
                     .basePath(WManagerConstants.WMANAGER_URI)
@@ -337,7 +339,8 @@ public class WManagerMain {
                                 response.status(HttpStatus.FAILED_DEPENDENCY);
                                 return Future.done();})
                             .flatMapCatch(ServiceNotFoundException.class, exception -> {
-                                logger.error("Operation not available anymore, WExecutor system providing "
+                                logger.error("No workflow-executor system offering services found in "
+                                        + "this local cloud OR WExecutor system providing "
                                         + "the workflow is not present anymore");
                                 response.status(HttpStatus.SERVICE_UNAVAILABLE);
                                 return Future.done();})
@@ -367,7 +370,38 @@ public class WManagerMain {
                 .await();
             
             //TODO: Add service to receive Workflow Executor results that receive(something) and sends a OperationResultDTO
-//            system.provide(new HttpService()
+            system.provide(new HttpService()
+                    // Mandatory service configuration details.
+                    .name(WManagerConstants.WMANAGER_OP_RESULTS_SERVICE_DEFINITION)
+                    .encodings(EncodingDescriptor.JSON)
+                    // Could I have another AccessPolicy for intercloud consumers?
+                    .accessPolicy(AccessPolicy.cloud())
+                    .basePath(WManagerConstants.WMANAGER_URI + WManagerConstants.WMANAGER_OP_RESULTS_URI)
+                    
+                    // HTTP GET endpoint that returns the workflows available in this workstation
+                    .post("/", (request, response) -> {
+                        return request
+                            .bodyAs(FinishWorkflowDto.class)
+                            .ifSuccess(finishWorkflow -> {
+                                sendOperationResults(finishWorkflow);
+                                logger.info("Received results of workflow:"
+                                        + " id = " + finishWorkflow.id() 
+                                        + ", workflowName = " +finishWorkflow.workflowName());
+                                response.status(HttpStatus.CREATED);})
+                            .ifFailure(Throwable.class, throwable -> {
+                                logger.error("Wrong request input to service, mut be a valid FinishWorkflow");
+                                response.status(HttpStatus.BAD_REQUEST);
+                            });
+                        
+                    }).metadata((Map.ofEntries(
+                        Map.entry("http-method","POST"),
+                        Map.entry("request-object-POST","FinishWorkflow"))))
+                )
+                .ifSuccess(handle -> logger.info("Workflow Manager "
+                        + WManagerConstants.WMANAGER_OP_RESULTS_SERVICE_DEFINITION
+                        + " service is now being served"))
+                .ifFailure(Throwable.class, Throwable::printStackTrace)
+                .await();
             
         } catch (Exception e) {
             e.printStackTrace();
@@ -545,6 +579,17 @@ public class WManagerMain {
                         .build()));
     }
     
+    /** 
+     * Checks if the Smart Product was already stored in memory, or if it is new, creates a new
+     * reference to this Smart Product system and updates internal memory.
+     * 
+     * @param request  The request to extract the information about the Smart Product from
+     * @param productID  The Smart Product identifier, which is optional
+     * @param operation  The unique operation identifier to which the Smart Product reference will
+     * be linked
+     * @return  the reference to the Smart Product system from memory if it was already stored or
+     * new otherwise
+     */
     private static SmartProduct getSmartProduct(HttpServiceRequest request, Optional<String> productID,
             int operation) {
         // Create Smart Product for comparison
@@ -560,6 +605,10 @@ public class WManagerMain {
             currentProductsInWorkstation.put(sp, sp);
         }
         return sp;
+    }
+    
+    private static void sendOperationResults(FinishWorkflowDto fworkflow) {
+        
     }
     
 
