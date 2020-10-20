@@ -85,7 +85,7 @@ public class WManagerMain {
     /**
      * The set of smart products currently present in the workstation
      */
-    private static final Map<SmartProduct,SmartProduct> currentProductsInWorkstation = new HashMap<>();
+    private static final Map<SmartProduct,SmartProduct> currentProductsInWorkstation = new ConcurrentHashMap<>();
     
     //------------------------------------------------------------------------
     
@@ -111,7 +111,7 @@ public class WManagerMain {
 
     public static void main( String[] args )
     {
-        logger.info("Productive 4.0 Workflow Manager Demonstrator - Workflow Manager System");
+        logger.info("Productive 4.0 Manufacturing Workflow Demonstrator - Workflow Manager System");
         
         // Working directory should always contain a properties file and certificates!
         System.out.println("Working directory: " + System.getProperty("user.dir"));
@@ -404,6 +404,7 @@ public class WManagerMain {
                 .await();
             
         } catch (Exception e) {
+            logger.error("Workflow Manager system could not startup, exiting application");
             e.printStackTrace();
         }
     }
